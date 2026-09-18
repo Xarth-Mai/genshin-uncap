@@ -1,0 +1,91 @@
+name: CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check and Linux tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --target x86_64-unknown-linux-gnu --locked -- -D warnings
+      - run: cargo test --target x86_64-unknown-linux-gnu --locked
+
+  windows-test:
+    name: Windows integration tests
+    runs-on: windows-latest
+    env:
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --examples --locked
+      - run: cargo test --locked
+
+  build:
+    name: Build Windows release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - run: sudo apt-get update && sudo apt-get install --yes gcc-mingw-w64-x86-64 zip
+      - run: cargo build --release --target x86_64-pc-windows-gnu --locked
+      - name: Package release
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$GITHUB_SHA"
+          fi
+          package_dir="genshin-uncap-v${version}-x86_64-pc-windows-gnu"
+          mkdir -p "dist/${package_dir}"
+          cp target/x86_64-pc-windows-gnu/release/genshin-uncap.exe "dist/${package_dir}/"
+          cp README.md LICENSE THIRD_PARTY_NOTICES.md "dist/${package_dir}/"
+          (cd dist && zip -r "${package_dir}.zip" "${package_dir}")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [check, windows-test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: dist
+      - name: Validate tag version
+        shell: bash
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="$(cargo metadata --no-deps --format-version 1 | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' | head -n 1)"
+          if [[ -z "$package_version" || "$tag_version" != "$package_version" ]]; then
+            echo "Tag version ${tag_version} does not match Cargo version ${package_version}" >&2
+            exit 1
+          fi
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.zip --generate-notes --verify-tag

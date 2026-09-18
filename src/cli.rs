@@ -191,9 +191,8 @@ mod tests {
     fn hidden_applies_to_controller_options_only() {
         let options = run_options(&["--hidden", "--game", "g.exe", "--", "--hidden"]);
         assert_eq!(options.args, args(&["--hidden"]));
-        for input in [vec!["--game", "g.exe", "--hidden"]] {
-            assert!(hidden_requested(&args(&input)));
-        }
+        let input = vec!["--game", "g.exe", "--hidden"];
+        assert!(hidden_requested(&args(&input)));
         for input in [
             vec!["--game", "g.exe", "--", "--hidden"],
             vec!["--game", "--hidden"],
