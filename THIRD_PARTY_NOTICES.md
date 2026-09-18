@@ -33,4 +33,9 @@ Used under the MIT license from [microsoft/windows-rs](https://github.com/micros
 
 The locator signature and design research reference xiaonian233/genshin-fps-unlock at `2f5f5e60882eb6c5e64159efe1eb36928e4f29ea` and 34736384/genshin-fps-unlock at `2b85d61dd06f6e11ad86fdd6bd90339f9abc58eb`; no injection payload, C++/C# implementation or third-party scanner was imported
 
-Fixed source links and license boundaries are recorded in [research.md](specs/001-fps-control/research.md)
+| Reference | Pinned source | License |
+| --- | --- | --- |
+| xiaonian233/genshin-fps-unlock | [main.cpp](https://github.com/xiaonian233/genshin-fps-unlock/blob/2f5f5e60882eb6c5e64159efe1eb36928e4f29ea/unlockfps/main.cpp) | [MIT](https://github.com/xiaonian233/genshin-fps-unlock/blob/2f5f5e60882eb6c5e64159efe1eb36928e4f29ea/LICENSE) |
+| 34736384/genshin-fps-unlock | [dllmain.cpp](https://github.com/34736384/genshin-fps-unlock/blob/2b85d61dd06f6e11ad86fdd6bd90339f9abc58eb/UnlockerStub/dllmain.cpp), [Utils.cpp](https://github.com/34736384/genshin-fps-unlock/blob/2b85d61dd06f6e11ad86fdd6bd90339f9abc58eb/UnlockerStub/Utils.cpp) | [MIT](https://github.com/34736384/genshin-fps-unlock/blob/2b85d61dd06f6e11ad86fdd6bd90339f9abc58eb/LICENSE) |
+
+These reference licenses remain separate from this project's [MPL-2.0 license](LICENSE)

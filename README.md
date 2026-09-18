@@ -1,73 +1,115 @@
 # genshin-uncap
 
-小型 Windows x64 Rust FPS 控制器，启动游戏后从外部周期检查 FPS 变量，仅当前值与固定目标不同时写入，退出工具即停止写入
+原神帧率控制工具，默认目标为 120 FPS，支持在游戏中按 F10 暂停或恢复控制，也可隐藏工具的控制台窗口
 
-既有构建已在本机 dwproton 上完成 120 FPS 连续 30 分钟、多次退出及完整 Steam 启动链试验；本次新增的“不同才写”已通过窄测和真实 Steam 启动、世界 FPS、游戏先退出复验，剧情过场和 BetterGI 自动化尚未验证，构建与逐项证据见 [验收记录](specs/001-fps-control/tasks.md)
+工具会启动游戏并从外部调整限帧值，目标范围为 1–120 FPS，实际帧率取决于硬件性能、游戏场景及其他限帧设置
 
-## 使用
+## 使用条件
+
+使用 Windows x64 可执行文件 `genshin-uncap.exe`；Linux 下通过游戏使用的 Proton 运行，控制器和游戏必须处于同一个 prefix（兼容环境）
+
+已有使用记录限于 Steam／dwproton 下的 `YuanShen.exe`，包含 XWayland 和原生 Wayland 下的 F10 与隐藏启动；原生 Windows、其他 Proton 版本和其他游戏版本尚未验证
+
+## 快速开始
+
+先退出已运行的游戏和控制器，然后在 Windows 命令提示符中执行以下命令，将路径替换为实际游戏位置
+
+```bat
+genshin-uncap.exe --game "C:\Games\Genshin Impact Game\YuanShen.exe" --fps 120
+```
+
+选择的是游戏本体 `YuanShen.exe`，而非启动器；工具只控制本次启动的游戏，不能接管已运行的游戏
+
+隐藏控制台启动时添加 `--hidden`
+
+```bat
+genshin-uncap.exe --hidden --game "C:\Games\Genshin Impact Game\YuanShen.exe" --fps 120
+```
+
+### Steam／Proton
+
+沿用原游戏的非 Steam 条目和 prefix，将目标改为本程序，并在「兼容性」中保留游戏原先使用的 Proton 版本，示例如下
+
+| 字段 | 示例 |
+| --- | --- |
+| 目标 | `"/path/to/compatdata/1234567890/pfx/drive_c/genshin-uncap.exe"` |
+| 起始位置 | `"/path/to/compatdata/1234567890/pfx/drive_c"` |
+
+「启动选项」填写以下整行
 
 ```text
-genshin-uncap.exe --game "C:\Program Files\miHoYo Launcher\games\Genshin Impact Game\YuanShen.exe" --fps 120
-genshin-uncap.exe --probe --game "C:\Program Files\miHoYo Launcher\games\Genshin Impact Game\YuanShen.exe"
+%command% --game "C:\Games\Genshin Impact Game\YuanShen.exe" --fps 120
 ```
 
-当前没有配置文件，使用命令行参数；`--game` 必填，`--fps` 默认 120，允许 1–120；`--` 后的参数原样传给游戏，运行期间不调节数值
+隐藏控制器窗口时使用
 
-`--probe` 只启动、读取和定位，绝不写入游戏内存；结束后游戏继续运行，再次运行工具前需自行退出游戏
+```text
+%command% --hidden --game "C:\Games\Genshin Impact Game\YuanShen.exe" --fps 120
+```
 
-通过 Ctrl+C 或关闭控制台退出工具，不恢复任何 FPS 值；最后写入值可能保留到游戏再次更新限帧，工具不会主动终止游戏
+将示例路径替换为实际位置；目标和起始位置使用 Linux 绝对路径，`--game` 使用原游戏 prefix 内的 Windows 路径
 
-固定每 500 ms 读取并校验页面、定位指令和 FPS 值，仅当前值不等于固定目标时写入；候选就绪前只读等待，目标上限严格为 120，不据此承诺 CPU 或内存收益
+程序参数放在 `%command%` 后面；`%command%` 保留原样，由 Steam 展开为所选 Proton 和目标程序的启动命令，prefix 目录结构可参考 [Proton FAQ](https://github.com/ValveSoftware/Proton/wiki/Proton-FAQ)
 
-仅操作本次启动的进程，不 attach；已运行游戏或另一控制器存在时拒绝启动，错误或不可信地址停止操作，不自动切换注入实现
+此入口由控制器直接启动游戏，不会执行原有批处理或自动启动 BetterGI；需要保留 BetterGI 联动时继续使用原有批处理入口，并避免其他启动器同时启动游戏
 
-## 构建与测试
+`--hidden` 只隐藏控制器自身的控制台，通过 `cmd.exe` 或批处理启动时，外层命令窗口仍可能显示；需要完全隐藏入口时，使用该 prefix 中的 WScript 隐藏启动批处理
 
-需要 Rust 的 `x86_64-pc-windows-gnu` 标准库和 `x86_64-w64-mingw32-gcc`，默认构建目标已经设为 Windows GNU
+## 操作与参数
 
-在已有 rustup 与 MinGW 的环境中，这些命令可直接从 Fish 执行
+游戏处于前台时，单独按 F10 暂停控制，再按一次恢复目标帧率；长按只切换一次，切回游戏后先松开 F10 再按，初始化期间按键无效
 
-```fish
+暂停会恢复本次启动时、工具首次调整前保存的限帧值，随后停止干预；例如保存值为 60，后来在游戏设置中改为 30，F10 暂停仍恢复到 60
+
+关闭控制台、按 Ctrl+C 或结束控制器进程会停止控制，既不恢复限帧值，也不主动关闭游戏；希望恢复保存值时，先按 F10 暂停再退出工具，游戏退出后工具会自动退出
+
+| 参数 | 作用 |
+| --- | --- |
+| `--game <路径>` | 必填，指定游戏 EXE，含空格的路径需加双引号 |
+| `--fps <整数>` | 目标帧率，默认 120，允许 1–120，本次运行期间固定 |
+| `--hidden` | 不创建控制器控制台，将运行信息写入日志 |
+| `--probe` | 只启动游戏并检查定位结果，不修改游戏内存，检查结束后游戏继续运行 |
+| `--help`、`-h` | 显示帮助，无需游戏路径且不启动游戏 |
+| `--version`、`-V` | 显示程序版本、rustc 版本、编译目标和构建 profile，无需游戏路径且不启动游戏 |
+| `-- <游戏参数…>` | 将后续参数原样传给游戏 |
+
+当前没有配置文件，也不支持运行期间增减目标帧率；需要更换目标时，退出游戏和工具后使用新参数重新启动
+
+## 常见问题
+
+**没有达到目标帧率**
+
+目标值是限帧设置，不保证硬件能达到该帧率；检查游戏垂直同步、外部限帧及当前场景负载，以实际帧率显示为准
+
+**提示游戏或控制器已运行**
+
+先退出已有游戏或控制器，再重新启动；`--probe` 结束后游戏仍在运行，也需要先退出游戏
+
+**游戏更新后无法定位或控制失败**
+
+定位不明确、地址校验失败或读写被拒绝时，工具会停止控制并报告错误，已启动的游戏继续运行；保留错误信息以便排查，当前实现不会自动下载补丁或切换控制方式
+
+**隐藏模式下如何查看状态或退出**
+
+日志位于 `%LOCALAPPDATA%\genshin-uncap\`，每次运行生成独立文件；失败时显示错误提示，正常运行时可在任务管理器结束 `genshin-uncap.exe`，或退出游戏让工具自动结束
+
+## 从源码构建
+
+Linux 交叉编译需要 Rust／Cargo、`x86_64-pc-windows-gnu` 标准库和 `x86_64-w64-mingw32-gcc`，使用 rustup 管理工具链时可添加目标后构建
+
+```sh
 rustup target add x86_64-pc-windows-gnu
 cargo build --release --locked
-cargo test --target x86_64-unknown-linux-gnu --locked
 ```
 
-本机安装了隔离工具链，保留系统 Rust；以下脚本仅使用 `target/toolchain/` 中已安装的工具，不联网安装或修改 shell 配置，同样可从 Fish 调用
+默认构建目标已设为 Windows GNU，产物为 `target/x86_64-pc-windows-gnu/release/genshin-uncap.exe`；运行预编译 EXE 不需要安装 Rust 或 MinGW
 
-```fish
-./scripts/cargo-local.sh build --release --locked
-./scripts/cargo-local.sh test --target x86_64-unknown-linux-gnu --locked
-./scripts/cargo-local.sh build --examples --locked
-./scripts/cargo-local.sh test --target x86_64-pc-windows-gnu --no-run --locked
-```
+Linux x64 下的纯逻辑测试可运行 `cargo test --target x86_64-unknown-linux-gnu --locked`，具体行为与验收标准见[行为规格](specs/fps-control.md)
 
-产物为 `target/x86_64-pc-windows-gnu/release/genshin-uncap.exe`，发布配置为速度优先的完整 LTO、单 codegen unit、符号剥离和 panic abort，不启用 `target-cpu=native`
+## 致谢
 
-`target/` 包括隔离工具链和测试 prefix，删除它会同时删除这些本机工具；跨机器构建使用前述正常 Rust／MinGW 安装方式
+感谢 [xiaonian233/genshin-fps-unlock](https://github.com/xiaonian233/genshin-fps-unlock) 和 [34736384/genshin-fps-unlock](https://github.com/34736384/genshin-fps-unlock) 提供的定位与设计参考，以及 [windows-rs](https://github.com/microsoft/windows-rs) 提供的 Windows API 绑定
 
-Windows 进程测试使用自建假目标，不访问真实游戏；本机隔离 dwproton Wine 测试命令如下，`target/test-prefix` 与真实游戏 prefix 分离
+## 开源协议
 
-```fish
-env DISPLAY=:0 WAYLAND_DISPLAY=wayland-1 WINEPREFIX="$PWD/target/test-prefix" WINEDEBUG=-all CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=/usr/share/steam/compatibilitytools.d/dwproton/files/bin/wine ./scripts/cargo-local.sh test --locked -- --test-threads=1
-```
-
-`controller_break_exit` 通过 API 定向发送 Ctrl+Break 时在当前 dwproton 下得到退出码 1，已确认 dwproton 将 CTRL_BREAK 转为 SIGQUIT，直接终止线程而未调用处理函数，作为明确忽略的回归保留；实际控制器的隔离 Ctrl+C 测试及真实 Ctrl+C／关闭窗口检查已分别通过，Ctrl+Break 的退出码异常单独保留
-
-调查该失败时，在上述命令的 `test` 后使用 `--test windows_flow controller_break_exit -- --ignored --nocapture --test-threads=1`；只向测试控制器的非零进程组发送事件
-
-真实验收与每项测试的证据见 [tasks.md](specs/001-fps-control/tasks.md)
-
-## 接入边界
-
-用户明确授权后，构建 `e949e68b` 经真实 Steam 入口完成启动、世界约 121 FPS 和退出链检查，BetterGI `0.65.0` 仅验证启动；新版 `a8b84948` 另经同一 Steam 入口复验，标题和世界 HUD 约 121 FPS，游戏先退出后控制器自动结束
-
-已安装至当前 prefix 的 `C:\genshin-uncap.exe`，原批处理备份为 `C:\genshin_bgi_unlock.cmd.before-genshin-uncap-20260919`，仅末行替换为新 EXE 的显式游戏路径和 `--fps 120`，保留 runner、prefix、工作目录和 BetterGI 顺序；回退时将备份复制回 `C:\genshin_bgi_unlock.cmd`
-
-本实现没有远程线程、DLL、shellcode、驱动、隐藏、权限提升、自动补丁下载或遥测
-
-## 设计与许可
-
-[行为规格](specs/001-fps-control/spec.md) · [研究证据](specs/001-fps-control/research.md) · [设计](specs/001-fps-control/plan.md) · [验收记录](specs/001-fps-control/tasks.md)
-
-项目保留现有 MPL-2.0 许可证，参考源码及其 MIT 许可、未引入的第三方部分见研究记录；参考不等于复用它们的执行代码
+本项目采用 [Mozilla Public License 2.0（MPL-2.0）](LICENSE)，第三方依赖与参考项目的来源、许可说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)

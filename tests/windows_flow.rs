@@ -518,7 +518,7 @@ fn controller_ctrl_c_exit() {
 }
 
 #[test]
-#[ignore = "dwproton 11.0-12 maps CTRL_BREAK to SIGQUIT and bypasses Win32 handlers; see research.md"]
+#[ignore = "dwproton 11.0-12 maps CTRL_BREAK to SIGQUIT and bypasses Win32 handlers"]
 fn controller_break_exit() {
     let _serial = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     // Wine's plain runner may have output pipes but no console for control events
