@@ -30,6 +30,7 @@ impl Output {
         .join("genshin-uncap");
         fs::create_dir_all(&directory)
             .map_err(|error| format!("create log directory {}: {error}", directory.display()))?;
+        cleanup_logs(&directory);
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|error| format!("log timestamp: {error}"))?
@@ -66,6 +67,29 @@ impl Output {
         } else {
             let _ = write_line(&mut io::stderr().lock(), format_args!("{message}"));
         }
+    }
+}
+
+fn cleanup_logs(directory: &std::path::Path) {
+    let mut logs: Vec<_> = fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !entry.file_type().ok()?.is_file() || path.extension()?.to_str()? != "log" {
+                return None;
+            }
+            let (timestamp, pid) = path.file_stem()?.to_str()?.rsplit_once('-')?;
+            let timestamp = timestamp.parse::<u128>().ok()?;
+            let pid = pid.parse::<u32>().ok()?;
+            Some((timestamp, pid, path))
+        })
+        .collect();
+    logs.sort_unstable();
+    let excess = logs.len().saturating_sub(9);
+    for (_, _, path) in logs.into_iter().take(excess) {
+        let _ = fs::remove_file(path);
     }
 }
 
@@ -116,5 +140,47 @@ pub fn show_error(message: &str) {
             windows_sys::core::w!("genshin-uncap"),
             MB_OK | MB_ICONERROR,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cleanup_logs;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    fn cleanup_keeps_recent_logs_and_ignores_other_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "genshin-uncap-log-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        for timestamp in 1..=11 {
+            fs::write(directory.join(format!("{timestamp}-1.log")), []).unwrap();
+        }
+        fs::write(directory.join("keep.txt"), []).unwrap();
+
+        cleanup_logs(&directory);
+
+        let logs = fs::read_dir(&directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry.path().extension().and_then(|value| value.to_str()) == Some("log")
+            })
+            .count();
+        assert_eq!(logs, 9);
+        assert!(!directory.join("1-1.log").exists());
+        assert!(!directory.join("2-1.log").exists());
+        assert!(directory.join("10-1.log").exists());
+        assert!(directory.join("11-1.log").exists());
+        assert!(directory.join("keep.txt").exists());
+        fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -478,7 +478,7 @@ fn foreground_f10_modes() {
 #[test]
 fn informational_flags_exit_without_launching() {
     let _serial = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-    for hidden in [false, true] {
+    for (hidden, with_game) in [(false, false), (true, false), (true, true)] {
         for (flag, expected) in [
             ("--help", genshin_uncap::cli::USAGE),
             ("--version", genshin_uncap::cli::VERSION),
@@ -493,6 +493,9 @@ fn informational_flags_exit_without_launching() {
             ));
             fs::create_dir_all(&directory).unwrap();
             let mut command = Command::new(CONTROLLER);
+            if with_game {
+                command.args(["--game", "unused.exe"]);
+            }
             command.arg(flag);
             if hidden {
                 command.arg("--hidden");
@@ -519,7 +522,7 @@ fn informational_flags_exit_without_launching() {
             let output = child.wait_with_output().unwrap();
             assert!(output.status.success());
             assert!(output.stderr.is_empty());
-            if hidden {
+            if hidden && with_game {
                 assert!(output.stdout.is_empty());
                 let logs: Vec<_> = fs::read_dir(directory.join("genshin-uncap"))
                     .unwrap()
@@ -627,6 +630,62 @@ fn real_windows_process_flow() {
     );
     assert!(missing_text.samples().iter().all(|&value| value == 60));
     missing_text.stop_game();
+}
+
+#[test]
+fn attach_mode_detects_existing_game_without_a_path() {
+    let _serial = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "genshin-uncap-attach-{}-{suffix}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let game = root.join("YuanShen.exe");
+    fs::copy(
+        Path::new(CONTROLLER)
+            .parent()
+            .unwrap()
+            .join("examples/fake_game.exe"),
+        &game,
+    )
+    .unwrap();
+    let report = root.join("report.txt");
+    let reset = root.join("reset.signal");
+    let exit = root.join("exit.signal");
+    let log = root.join("controller.log");
+    let mut target = Command::new(&game)
+        .args([&report, &reset, &exit])
+        .creation_flags(CREATE_NEW_PROCESS_GROUP)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let output = File::create(&log).unwrap();
+    let mut controller = Command::new(CONTROLLER)
+        .args(["--fps", "120"])
+        .creation_flags(CREATE_NEW_PROCESS_GROUP)
+        .stdin(Stdio::null())
+        .stdout(output.try_clone().unwrap())
+        .stderr(output)
+        .spawn()
+        .unwrap();
+
+    wait_until(
+        || {
+            sample_values(&fs::read_to_string(&report).unwrap_or_default())
+                .any(|value| value == "120")
+        },
+        "attach mode writes 120",
+    );
+    fs::write(&exit, []).unwrap();
+    assert!(controller.wait().unwrap().success());
+    assert!(target.wait().unwrap().success());
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

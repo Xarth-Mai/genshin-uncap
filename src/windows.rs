@@ -1,10 +1,10 @@
 use crate::{cli::Options, hotkey::F10Edge, output::Output, scan};
 use std::{
     collections::BTreeMap,
-    ffi::{OsStr, OsString},
+    ffi::OsString,
     mem::{size_of, zeroed},
     os::windows::{ffi::OsStringExt, process::CommandExt},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     ptr::null,
     sync::atomic::{AtomicBool, Ordering},
@@ -24,6 +24,7 @@ use windows_sys::Win32::{
 const PERIOD: Duration = Duration::from_millis(500);
 const INIT_TIMEOUT: Duration = Duration::from_secs(60);
 const INPUT_PERIOD: Duration = Duration::from_millis(20);
+const AUTO_GAME_NAMES: [&str; 2] = ["YuanShen.exe", "GenshinImpact.exe"];
 static STOP: AtomicBool = AtomicBool::new(false);
 
 fn error(stage: &str) -> String {
@@ -119,13 +120,14 @@ fn wait(process: &Handle, duration: Duration) -> Result<bool, String> {
     running(process)
 }
 
-fn existing_game(name: &OsStr) -> Result<bool, String> {
+fn game_processes(names: &[&str]) -> Result<Vec<u32>, String> {
     let snapshot = Handle::new(
         unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) },
         "process snapshot",
     )?;
     let mut entry: PROCESSENTRY32W = unsafe { zeroed() };
     entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+    let mut processes = Vec::new();
     let mut result = unsafe { Process32FirstW(snapshot.0, &mut entry) };
     while result != 0 {
         let end = entry
@@ -133,21 +135,25 @@ fn existing_game(name: &OsStr) -> Result<bool, String> {
             .iter()
             .position(|&c| c == 0)
             .unwrap_or(entry.szExeFile.len());
-        if OsString::from_wide(&entry.szExeFile[..end])
-            .to_string_lossy()
-            .eq_ignore_ascii_case(&name.to_string_lossy())
+        let name = OsString::from_wide(&entry.szExeFile[..end]);
+        if names
+            .iter()
+            .any(|candidate| name.to_string_lossy().eq_ignore_ascii_case(candidate))
         {
-            return Ok(true);
+            processes.push(entry.th32ProcessID);
         }
         result = unsafe { Process32NextW(snapshot.0, &mut entry) };
     }
     if unsafe { GetLastError() } != ERROR_NO_MORE_FILES {
         return Err(error("enumerate processes"));
     }
-    Ok(false)
+    Ok(processes)
 }
 
-fn base_module(pid: u32, expected: &Path) -> Result<Option<(usize, usize)>, String> {
+fn base_module(
+    pid: u32,
+    expected: Option<&Path>,
+) -> Result<Option<(PathBuf, usize, usize)>, String> {
     let raw = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid) };
     if raw == INVALID_HANDLE_VALUE && unsafe { GetLastError() } == ERROR_BAD_LENGTH {
         return Ok(None);
@@ -168,14 +174,17 @@ fn base_module(pid: u32, expected: &Path) -> Result<Option<(usize, usize)>, Stri
         .unwrap_or(entry.szExePath.len());
     let actual = std::fs::canonicalize(OsString::from_wide(&entry.szExePath[..end]))
         .map_err(|e| format!("module identity: {e}"))?;
-    if !actual
-        .as_os_str()
-        .to_string_lossy()
-        .eq_ignore_ascii_case(&expected.as_os_str().to_string_lossy())
-    {
-        return Err(format!("module identity mismatch: {actual:?}"));
+    if let Some(expected) = expected {
+        if !actual
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&expected.as_os_str().to_string_lossy())
+        {
+            return Err(format!("module identity mismatch: {actual:?}"));
+        }
     }
     Ok(Some((
+        actual,
         entry.modBaseAddr as usize,
         entry.modBaseSize as usize,
     )))
@@ -431,32 +440,6 @@ fn run_controller(options: Options, output: &mut Output) -> Result<(), String> {
     if mutex_error == ERROR_ALREADY_EXISTS {
         return Err("another controller is running in this session".into());
     }
-    let game = std::fs::canonicalize(&options.game).map_err(|e| format!("game path: {e}"))?;
-    if !game.is_file() {
-        return Err("game path is not a file".into());
-    }
-    let name = game.file_name().ok_or("game path has no filename")?;
-    if existing_game(name)? {
-        return Err("game is already running; close it before starting this tool".into());
-    }
-    if STOP.load(Ordering::SeqCst) {
-        output.line(format_args!("Cancelled before launch"))?;
-        return Ok(());
-    }
-    output.line(format_args!(
-        "Launching: {game:?}; target={} FPS; probe={}",
-        options.fps, options.probe
-    ))?;
-    // The child must not share our console; closing this window must leave it alive
-    let child = Command::new(&game)
-        .args(&options.args)
-        .current_dir(game.parent().ok_or("game directory missing")?)
-        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("launch: {e}"))?;
     let rights = PROCESS_QUERY_INFORMATION
         | PROCESS_VM_READ
         | PROCESS_SYNCHRONIZE
@@ -465,21 +448,93 @@ fn run_controller(options: Options, output: &mut Output) -> Result<(), String> {
         } else {
             PROCESS_VM_WRITE | PROCESS_VM_OPERATION
         };
-    let process = Handle::new(
-        unsafe { OpenProcess(rights, 0, child.id()) },
-        "open child process",
-    )?;
-    let pid = child.id();
-    drop(child);
-    output.line(format_args!("Launched Win32 PID={pid}; waiting for module"))?;
+    let (game, pid, process) = match options.game {
+        Some(path) => {
+            let game = std::fs::canonicalize(&path).map_err(|e| format!("game path: {e}"))?;
+            if !game.is_file() {
+                return Err("game path is not a file".into());
+            }
+            let name = game.file_name().ok_or("game path has no filename")?;
+            let name = name.to_string_lossy();
+            if !game_processes(&[name.as_ref()])?.is_empty() {
+                return Err("game is already running; close it before starting this tool".into());
+            }
+            if STOP.load(Ordering::SeqCst) {
+                output.line(format_args!("Cancelled before launch"))?;
+                return Ok(());
+            }
+            output.line(format_args!(
+                "Launching: {game:?}; target={} FPS; probe={}",
+                options.fps, options.probe
+            ))?;
+            // The child must not share our console; closing this window must leave it alive
+            let child = Command::new(&game)
+                .args(&options.args)
+                .current_dir(game.parent().ok_or("game directory missing")?)
+                .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| format!("launch: {e}"))?;
+            let pid = child.id();
+            let process =
+                Handle::new(unsafe { OpenProcess(rights, 0, pid) }, "open child process")?;
+            drop(child);
+            output.line(format_args!("Launched Win32 PID={pid}; waiting for module"))?;
+            (Some(game), pid, process)
+        }
+        None => {
+            output.line(format_args!(
+                "Waiting for YuanShen.exe or GenshinImpact.exe; target={} FPS; probe={}",
+                options.fps, options.probe
+            ))?;
+            if !options.args.is_empty() {
+                output.line(format_args!("Ignoring game arguments without --game"))?;
+            }
+            loop {
+                if STOP.load(Ordering::SeqCst) {
+                    output.line(format_args!("Cancelled while waiting for game"))?;
+                    return Ok(());
+                }
+                let pids = game_processes(&AUTO_GAME_NAMES)?;
+                if pids.len() > 1 {
+                    return Err(
+                        "multiple supported game processes are running; close the extra game"
+                            .into(),
+                    );
+                }
+                if let Some(&pid) = pids.first() {
+                    let process = Handle::new(
+                        unsafe { OpenProcess(rights, 0, pid) },
+                        "open existing game process",
+                    )?;
+                    output.line(format_args!(
+                        "Attached to Win32 PID={pid}; waiting for module"
+                    ))?;
+                    break (None, pid, process);
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    };
     let deadline = Instant::now() + INIT_TIMEOUT;
     let (base, size) = loop {
         if !initializing(&process)? {
             output.line(format_args!("Cancelled during initialization"))?;
             return Ok(());
         }
-        if let Some(module) = base_module(pid, &game)? {
-            break module;
+        if let Some((actual, base, size)) = base_module(pid, game.as_deref())? {
+            if game.is_none()
+                && !actual.file_name().is_some_and(|name| {
+                    AUTO_GAME_NAMES
+                        .iter()
+                        .any(|candidate| name.to_string_lossy().eq_ignore_ascii_case(candidate))
+                })
+            {
+                return Err(format!("module identity mismatch: {actual:?}"));
+            }
+            break (base, size);
         }
         if Instant::now() >= deadline {
             return Err("module initialization timeout".into());
