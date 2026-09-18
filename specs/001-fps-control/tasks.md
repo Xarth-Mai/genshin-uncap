@@ -29,7 +29,9 @@
 | T-010a | AC-009 | 产物格式、imports 和大小检查 | PASS | PE32+ x86-64 控制台 EXE，大小与 imports 已检查，最终哈希见 target/evidence/build.json |
 | T-010b | REQ-010／AC-009 | 控制器内存与 CPU 采样 | PASS | 20 秒样本单核 0.05%、RSS 8240 KiB、VmHWM 430732 KiB、主动上下文切换 41.09/s；精确唤醒和额外启动耗时 NOT RUN |
 | T-011a | REQ-012／AC-009 | Fish 可执行构建说明与本机工具链入口 | PASS | README 与 `scripts/cargo-local.sh` 已提供，Fish 语法及实际版本调用通过 |
-| T-011b | REQ-012／AC-009 | 备份并替换旧解锁器调用 | BLOCKED | 完整场景和现有Steam／BetterGI链接入未完成验收，保留旧脚本，当前交付为已实现且部分真实验证的EXE |
+| T-011b | REQ-012／AC-009 | 备份替换旧调用并验证完整Steam链 | PASS | 用户明确授权后安装e949e68b构建，经真实Steam入口确认启动、世界HUD121与退出清理，备份保留；BetterGI仅验证启动 |
+| T-012a | REQ-006、REQ-010 | 500ms完整读取校验、仅当前值不同才写入的构建与窄测 | PASS | a8b84948构建，Linux7项、Windows库9项、进程4项通过，1项已知诊断忽略，之前60秒超时过滤；无写权限句柄验证相同值不调用写API，不同值仍尝试写入，其他保护不变 |
+| T-012b | REQ-010、REQ-012 | 不同才写的新版完整Steam复验 | PASS | 04:26:19–04:29:57经真实Steam入口启动，标题及世界HUD121，游戏先退出后控制器结束，关闭BetterGI后36个PID清理，wrapper退出0、电源配置恢复 |
 
 ## 执行记录
 
@@ -47,23 +49,37 @@
 | 2026-09-19 | 假目标／T-005d | 隔离 Wine 中分别执行 `initialization_timeout_stops_without_writing`、`delayed_ready_stays_read_only_until_stable` | 60 秒超时；-1 延迟就绪后稳定至少 500 ms 才写入 | PASS |
 | 2026-09-19 | 真实只读／T-007 | 同 runtime／prefix，`probe.cmd` 捕获控制器输出 | 模块、候选、-1→60 与 PROBE COMPLETE 已留存，退出 0 | PASS |
 | 2026-09-19 03:15 +08:00 起 | 真实写入／T-008 | `trial.cmd`、`trial-command.json`、MangoHUD 每秒 CSV | 世界、菜单、30FPS设置覆盖、垂直同步开／关、一次传送与30分钟记录通过；退出结果分别记录 | PASS |
+| 2026-09-19 04:11:35–04:21:46 +08:00 | 真实Steam完整链／T-011b | `steam://rungameid/10009322670912438272`，a6cf71d对应e949e68b构建，保留原game-performance、runtime4、dwproton、cmd和BetterGI顺序 | 世界HUD121／8.2ms，Ctrl+C仅结束控制器，游戏与BetterGI随后分别关闭，37个跟踪PID移除，最外层wrapper退出0 | PASS |
+| 2026-09-19 04:26:19–04:29:57 +08:00 | 新版真实Steam链／T-012b | 同一 `steam://rungameid/10009322670912438272` 入口，a8b84948构建，每500ms检查、仅不同才写 | 标题及世界HUD121／8.2ms；正常关闭游戏后控制器结束，关闭BetterGI后36个跟踪PID清理，wrapper退出0，恢复power-saver和disabled idle inhibit；本轮未捕获Win32子进程退出码 | PASS |
 
-最终120上限构建为391680字节，SHA-256 `e949e68be5bea2dac65b1dcc5f538c453f004c11ac44462f27f1ae0b7dcd63c6`，实际构建命令 `./scripts/cargo-local.sh build --release --offline --locked`；格式检查 `rustfmt --check --edition 2024 src/*.rs examples/*.rs tests/*.rs` 通过
+新版窄测实际命令为 `env DISPLAY=:0 WAYLAND_DISPLAY=wayland-1 WINEPREFIX="$PWD/target/test-prefix" WINEDEBUG=-all CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=/usr/share/steam/compatibilitytools.d/dwproton/files/bin/wine ./scripts/cargo-local.sh test --offline --locked -- --test-threads=1 --skip initialization_timeout_stops_without_writing`，Windows库9项与进程4项通过，进程用时7.71秒，日志 `target/evidence/windows-check-before-write-tests.log`；Linux7项和rustfmt检查也通过
 
-首轮30分钟和真实Ctrl+C使用前一份构建 `4da7db30f658d7f3dc7377fe8bf9042dc791d7baa158100bfc06f40c50249859`，实际目标始终120；随后仅将CLI及候选值上限由1000收紧为120，最终构建重新通过Windows库8项与进程4项窄测，复用此前已通过的60秒超时证据，并用于后续3次真实生命周期测试，不将其写成最终二进制另跑了30分钟
+120上限及首轮完整Steam链构建为391680字节，SHA-256 `e949e68be5bea2dac65b1dcc5f538c453f004c11ac44462f27f1ae0b7dcd63c6`，对应实现提交 `a6cf71d`，实际构建命令 `./scripts/cargo-local.sh build --release --offline --locked`；格式检查 `rustfmt --check --edition 2024 src/*.rs examples/*.rs tests/*.rs` 通过
+
+本次不同才写的新版同为391680字节，SHA-256 `a8b8494876aeb695a5b0bb26db5e844336cd8886af3694fffc283244fe579ea3`，已安装至同一 `C:\genshin-uncap.exe`；窄测结果见T-012a，Windows库新增无写权限句柄与条件写入检查，覆盖不同目标值及非法或不可读输入拒绝；新版真实Steam结果见T-012b，未另跑30分钟
+
+首轮30分钟和真实Ctrl+C使用前一份构建 `4da7db30f658d7f3dc7377fe8bf9042dc791d7baa158100bfc06f40c50249859`，实际目标始终120；随后仅将CLI及候选值上限由1000收紧为120，e949e68b构建重新通过Windows库8项与进程4项窄测，复用此前已通过的60秒超时证据，并用于后续3次真实生命周期测试，不将其写成该二进制另跑了30分钟；新版的窄测和Steam复验单独记录，不将旧30分钟记录算作新版耐久验收
 
 | 真实循环 | 构建／目标 | 退出动作 | 观察结果 | 证据 |
 | --- | --- | --- | --- | --- |
 | 1 | 前一构建／120 | 实际控制台Ctrl+C | 连续记录1800.145秒；控制器退出0、游戏存活，随后游戏设30实测30、恢复60实测60 | `trial-controller.log`、`trial-exit.txt`、`trial-30min-summary.json`、`scenarios.json` |
-| 2 | 最终构建／120 | 正常关闭控制台 | 控制器消失、游戏存活，关闭窗口没有保留退出码或STOPPED尾句 | `cycle2-controller.log`、`cycle2-command.json`、`scenarios.json` |
-| 3 | 最终构建／120 | 核对控制器身份后SIGKILL | 控制器退出1、游戏存活，未向游戏发送终止信号 | `cycle3-stop.json`、`cycle3-exit.txt` |
-| 4 | 最终构建／120 | 正常关闭游戏 | 控制器打印STOPPED并退出0，双方均已结束 | `cycle4-controller.log`、`cycle4-exit.txt` |
+| 2 | e949e68b构建／120 | 正常关闭控制台 | 控制器消失、游戏存活，关闭窗口没有保留退出码或STOPPED尾句 | `cycle2-controller.log`、`cycle2-command.json`、`scenarios.json` |
+| 3 | e949e68b构建／120 | 核对控制器身份后SIGKILL | 控制器退出1、游戏存活，未向游戏发送终止信号 | `cycle3-stop.json`、`cycle3-exit.txt` |
+| 4 | e949e68b构建／120 | 正常关闭游戏 | 控制器打印STOPPED并退出0，双方均已结束 | `cycle4-controller.log`、`cycle4-exit.txt` |
 
-完整复跑命令为 `env DISPLAY=:0 WAYLAND_DISPLAY=wayland-1 WINEPREFIX="$PWD/target/test-prefix" WINEDEBUG=-all CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=/usr/share/steam/compatibilitytools.d/dwproton/files/bin/wine ./scripts/cargo-local.sh test --offline --locked -- --test-threads=1`，结果 Windows 库 8 项通过，进程测试 5 项通过、0 失败、1 项明确忽略，用时 68.56 秒，完整日志 `target/evidence/windows-final-tests.log`
+a6cf71d提交前完整复跑命令为 `env DISPLAY=:0 WAYLAND_DISPLAY=wayland-1 WINEPREFIX="$PWD/target/test-prefix" WINEDEBUG=-all CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=/usr/share/steam/compatibilitytools.d/dwproton/files/bin/wine ./scripts/cargo-local.sh test --offline --locked -- --test-threads=1`，结果 Windows 库 8 项通过，进程测试 5 项通过、0 失败、1 项明确忽略，用时 68.56 秒，完整日志 `target/evidence/windows-final-tests.log`
 
 `target/evidence/` 为忽略的本机证据目录，首轮探针日志丢失已通过带重定向的探针重跑补齐，`probe-ready.log` 和 `probe-ready-exit.txt` 留存候选及退出码
 
-真实试验手动经同 `SteamLinuxRuntime_4 → dwproton → cmd.exe` 调用，保留真实 prefix 与 XWayland／MangoHUD，现有 Steam shortcut、BetterGI 和 `game-performance` 包装流程尚未执行，完整接入为 `NOT RUN`；真实游戏已进行获批限定写入，现有启动批处理保持原样
+前述30分钟与4轮生命周期试验手动经同 `SteamLinuxRuntime_4 → dwproton → cmd.exe` 调用，保留真实 prefix 与 XWayland／MangoHUD，当时未运行完整Steam链；本轮另通过真实Steam入口完成首轮完整链，不将其写成再次进行30分钟试验
+
+用户明确授权本轮接入后，已安装 `C:\genshin-uncap.exe`，原批处理备份为 `C:\genshin_bgi_unlock.cmd.before-genshin-uncap-20260919`，仅末行替换为 `"C:\genshin-uncap.exe" --game "C:\Program Files\miHoYo Launcher\games\Genshin Impact Game\YuanShen.exe" --fps 120`，其余内容保持不变，当前接入保留；复制备份回 `C:\genshin_bgi_unlock.cmd` 即可恢复旧调用
+
+首轮完整链为 `Steam → game-performance → SteamLinuxRuntime_4 → dwproton → cmd.exe → BetterGI与控制器 → YuanShen.exe`；世界HUD121FPS／8.2ms，固定写入120；Ctrl+C后控制器消失而游戏与BetterGI存活，关闭游戏后BetterGI仍存活、电源配置仍为performance，关闭BetterGI后37个已跟踪PID全部从Steam列表移除，最外层wrapper退出0，Steam结束运行状态、电源配置恢复power-saver、idle inhibit已disabled
+
+Steam对本轮Wine子进程报告退出码-1，未捕获实际Win32退出码或STOPPED尾句，不声称本轮控制器退出0；BetterGI `0.65.0` 仅验证启动，未验证截图或自动化，过场等原未测场景仍为NOT RUN
+
+本轮证据为 `target/evidence/steam-chain-{install,run,processes,observations}.json` 和 `steam-chain-gameprocess.log`，与其余本机证据一样被Git忽略；新版证据为 `conditional-write-build.json`、`steam-conditional-{run,processes,observations}.json` 和 `steam-conditional-gameprocess.log`
 
 桌面锁屏阻塞已在用户授权后通过正常 DMS IPC 解除，试验期间临时启用idle inhibit，结束已恢复为disabled；所有测试游戏已正常关闭，游戏内FPS恢复60、垂直同步恢复关闭，原神音量按用户要求保持15%
 
@@ -80,11 +96,13 @@
 | 过场 | 不用无关剧情进展替代测试，尚无对应证据 | NOT RUN |
 | 后台与恢复 | 控制台抢焦点后恢复游戏，地图 HUD122、世界 HUD121，控制器无错误；这不是原生最小化验收 | PASS |
 | 真实 Ctrl+C | 控制器退出码0且STOPPED，游戏存活；游戏手动设30后HUD30，恢复60后HUD60 | PASS |
-| 关闭控制台 | 最终120上限构建在标题画面HUD121后关闭控制台，控制器消失且游戏继续存活；窗口关闭未留存退出码或STOPPED尾句 | PASS |
+| 关闭控制台 | e949e68b构建在标题画面HUD121后关闭控制台，控制器消失且游戏继续存活；窗口关闭未留存退出码或STOPPED尾句 | PASS |
 | 强制结束 | 精确核对第三轮控制器身份后SIGKILL，控制器消失且返回1，真实游戏继续运行；假目标另证明无后续覆盖 | PASS |
 | 游戏先退出及重新启动 | 第4轮先正常关闭游戏，控制器打印STOPPED并退出0；每轮新进程重新扫描 | PASS |
 | 连续30分钟覆盖 | 1800个每秒样本，记录1800.145秒；加载后1591样本中位121.031FPS，首轮结束时控制器仍运行 | PASS |
-| 至少3次循环 | 已完成Ctrl+C、关闭控制台、强制结束和游戏先退出4轮；最终构建用于第2–4轮，每轮重新取得句柄并扫描 | PASS |
+| 至少3次循环 | 已完成Ctrl+C、关闭控制台、强制结束和游戏先退出4轮；e949e68b构建用于第2–4轮，每轮重新取得句柄并扫描 | PASS |
+| 首轮完整Steam链 | a6cf71d对应e949e68b构建，经真实Steam入口进入世界HUD121，Ctrl+C仅结束控制器，随后关闭游戏和BetterGI完成wrapper清理；仅验证BetterGI启动 | PASS |
+| 本次不同才写的新版Steam复验 | a8b84948构建每500ms检查、仅不同才写；同一真实入口启动，标题和世界HUD121，游戏先退出后控制器结束，随后关闭BetterGI完成清理 | PASS |
 
 ## 明确不适用的旧验收项
 

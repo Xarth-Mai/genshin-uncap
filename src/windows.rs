@@ -386,6 +386,18 @@ fn value(process: &Handle, candidate: &Candidate) -> Result<i32, String> {
     ))
 }
 
+fn update_fps(process: &Handle, candidate: &Candidate, target: i32) -> Result<bool, String> {
+    let current = value(process, candidate)?;
+    if !(1..=120).contains(&current) {
+        return Err(format!("unverified FPS value {current}; stopping"));
+    }
+    if current == target || !running(process)? {
+        return Ok(false);
+    }
+    write(process, candidate.address, &target.to_le_bytes())?;
+    Ok(true)
+}
+
 pub fn run(options: Options) -> Result<(), String> {
     let _handler = ConsoleHandler::install()?;
     let result = run_controller(options);
@@ -517,6 +529,11 @@ fn run_controller(options: Options) -> Result<(), String> {
         println!("PROBE COMPLETE: zero writes; game left running");
         return Ok(());
     }
+    println!(
+        "CHECKING: target {} FPS every {} ms; writing only when different",
+        options.fps,
+        PERIOD.as_millis()
+    );
     let mut wrote = false;
     let outcome = (|| -> Result<(), String> {
         while running(&process)? {
@@ -526,19 +543,10 @@ fn run_controller(options: Options) -> Result<(), String> {
             {
                 return Err("locator instruction changed; stopping".into());
             }
-            let current = value(&process, &candidate)?;
-            if !(1..=120).contains(&current) {
-                return Err(format!("unverified FPS value {current}; stopping"));
-            }
-            if !running(&process)? {
-                break;
-            }
-            write(&process, candidate.address, &options.fps.to_le_bytes())?;
-            if !wrote {
+            if update_fps(&process, &candidate, options.fps)? && !wrote {
                 println!(
-                    "WRITING: {} FPS every {} ms; actual frame rate requires measurement",
-                    options.fps,
-                    PERIOD.as_millis()
+                    "WRITING: set {} FPS; actual frame rate requires measurement",
+                    options.fps
                 );
                 wrote = true;
             }
@@ -561,6 +569,71 @@ fn run_controller(options: Options) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matching_fps_needs_no_write_access_but_mismatch_does() {
+        let process = Handle::new(
+            unsafe {
+                OpenProcess(
+                    PROCESS_VM_READ | PROCESS_SYNCHRONIZE,
+                    0,
+                    GetCurrentProcessId(),
+                )
+            },
+            "read-only self process",
+        )
+        .unwrap();
+        let fps = std::sync::atomic::AtomicI32::new(120);
+        let candidate = Candidate {
+            address: fps.as_ptr() as usize,
+            instruction: 0,
+            evidence: vec![],
+        };
+        // No write permission: success proves matching values skip WriteProcessMemory
+        assert!(write(&process, candidate.address, &120_i32.to_le_bytes()).is_err());
+        assert!(!update_fps(&process, &candidate, 120).unwrap());
+        fps.store(60, Ordering::SeqCst);
+        assert!(
+            update_fps(&process, &candidate, 120)
+                .unwrap_err()
+                .contains("WriteProcessMemory")
+        );
+        assert_eq!(fps.load(Ordering::SeqCst), 60);
+        let writable = Handle::new(
+            unsafe {
+                OpenProcess(
+                    PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_SYNCHRONIZE,
+                    0,
+                    GetCurrentProcessId(),
+                )
+            },
+            "writable self process",
+        )
+        .unwrap();
+        assert!(update_fps(&writable, &candidate, 120).unwrap());
+        assert_eq!(fps.load(Ordering::SeqCst), 120);
+        assert!(update_fps(&writable, &candidate, 60).unwrap());
+        assert_eq!(fps.load(Ordering::SeqCst), 60);
+        assert!(!update_fps(&process, &candidate, 60).unwrap());
+        for invalid in [-1, 0, 121] {
+            fps.store(invalid, Ordering::SeqCst);
+            assert!(
+                update_fps(&writable, &candidate, 120)
+                    .unwrap_err()
+                    .contains("unverified FPS value")
+            );
+            assert_eq!(fps.load(Ordering::SeqCst), invalid);
+        }
+        let unreadable = Candidate {
+            address: 0,
+            ..candidate
+        };
+        assert!(
+            update_fps(&writable, &unreadable, 120)
+                .unwrap_err()
+                .contains("ReadProcessMemory")
+        );
+    }
 
     #[test]
     fn inaccessible_ranges_are_errors_not_complete_reads_or_writes() {

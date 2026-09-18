@@ -6,6 +6,10 @@
 
 用户后续明确实际写入不得超过120FPS，因此CLI与候选运行值上限收紧到120；所有已执行真实试验目标均为120，原计划的144对照未执行，后续只用120
 
+用户在首轮完整Steam链通过后要求减少相同值的重复写入：检查周期保持500ms，每次照常读取并校验页面、定位指令和FPS值，仅当前值与固定目标不同时调用写入；不放宽原防护，不预先声称性能收益
+
+新版构建为391680字节，SHA-256 `a8b8494876aeb695a5b0bb26db5e844336cd8886af3694fffc283244fe579ea3`，已安装至同一 `C:\genshin-uncap.exe`；Linux7项、Windows库9项和进程4项窄测通过，1项已知Ctrl+Break诊断忽略，之前通过的60秒超时本轮过滤，第二轮真实Steam复验在 `04:26:19–04:29:57 +08:00` 完成，标题和世界HUD121／8.2ms，实际目标120；游戏先退出后控制器自动结束，随后关闭BetterGI，36个跟踪PID全部移除，最外层wrapper退出0，电源配置恢复power-saver、idle inhibit恢复disabled
+
 需求来源为用户会话与附件 `genshin-uncap-spec-pack.zip` 内的 `genshin-uncap-source-audit.md`、`genshin-uncap-codex-spec-prompt.md`，附件启动 Prompt 是较早的审计和访谈指引，最终获批行为以 [spec.md](spec.md) 为准
 
 | 参考项目 | 固定 commit | 根许可证 |
@@ -35,11 +39,11 @@
 
 ## 当前环境与未验证项
 
-本机配置为 `YuanShen.exe`、120 FPS、游戏配置版本标记 `7.0.0`，当前 runner 为 dwproton `11.0.12`，prefix 为 Steam `compatdata/2330477040`，runner 需要 app `4183110` 对应的 `SteamLinuxRuntime_4`；现有 Steam／dwproton／prefix／BetterGI 链保持不变
+本机配置为 `YuanShen.exe`、120 FPS、游戏配置版本标记 `7.0.0`，当前 runner 为 dwproton `11.0.12`，prefix 为 Steam `compatdata/2330477040`，runner 需要 app `4183110` 对应的 `SteamLinuxRuntime_4`；保留Steam、runner、prefix和BetterGI顺序，获批接入仅替换原批处理末行的旧解锁器调用
 
 开始实施时仓库只有 Cargo 初始代码，缺少 Windows 标准库与 MinGW；本轮已在忽略目录 `target/toolchain/` 安装隔离 Rust `1.98.1` 与 GNU 交叉工具链，系统 Rust 保持不变，默认 `x86_64-pc-windows-gnu` release 构建成功，产物确认是 PE32+ x86-64 控制台 EXE
 
-Linux 宿主 7 项纯逻辑测试通过，Windows 8 项库测试在 Wine 通过，后者增加 committed 页范围、跨 `PAGE_NOACCESS` 边界及地址溢出的读写失败检查；这些结果仅证明测试输入下的边界处理
+初版Linux宿主7项纯逻辑测试通过，Windows8项库测试在Wine通过，后者增加 committed 页范围、跨 `PAGE_NOACCESS` 边界及地址溢出的读写失败检查；不同才写的新版Windows库测试增至9项并通过，这些结果仅证明测试输入下的边界处理
 
 Wine 自建假目标已验证 Unicode／空格／空参数／引号／尾随反斜杠参数和工作目录、只读探针不写入、120 覆盖、重复控制器与已有游戏拒绝、强制结束控制器后假目标自行设置的 30 在超过 1.2 秒内保持、游戏先退出后控制器退出码为 0，以及假目标定位前以 7 早退使控制器失败且无写入
 
@@ -51,7 +55,7 @@ Wine 自建假目标已验证 Unicode／空格／空参数／引号／尾随反�
 
 该 `CTRL_BREAK` 回归保留为已知环境失败并默认显式忽略，不改生产逻辑或放宽退出码断言；同一隔离 prefix 的另一最小 C 试验先确认新控制台仅含自建父子两个进程，再向该私有控制台发送 `CTRL_C_EVENT`，双方处理函数记录事件 0，子进程正常退出 0，证据为 `ctrl-c-parent.log` 和 `ctrl-c-child.log`，这只证明该最小例的 Ctrl+C 分发，不代替真实控制器 Ctrl+C 或关闭窗口验收
 
-发布产物及哈希按最终构建记录在本机 `target/evidence/build.json`，重新链接可能因 PE 时间戳改变哈希，不宣称逐字节可复现
+发布产物及哈希按对应构建记录在本机 `target/evidence/build.json`，首轮完整Steam链构建另记于 `steam-chain-install.json`，新版构建及结果另记于 `conditional-write-build.json` 和 `steam-conditional-observations.json`；重新链接可能因 PE 时间戳改变哈希，不宣称逐字节可复现
 
 首轮真实探针未捕获控制器输出，不能证明定位；用户授权解锁后，经正常桌面 IPC 解锁并重跑捕获输出的只读探针，日志见 `target/evidence/probe-ready.log`
 
@@ -61,7 +65,15 @@ Wine 自建假目标已验证 Unicode／空格／空参数／引号／尾随反�
 
 2026-09-19 约 `03:15 +08:00` 开始限定真实写入，固定 500 ms 周期和 120 FPS，登录后进入游戏，世界、菜单及设置画面 HUD 约 121 FPS；MangoHUD 每秒记录 CSV，30分钟记录完成1800个样本／1800.145秒，初次世界加载约189–202秒出现1–19FPS，加载后1591个样本中位121.031FPS；保留一次449FPS异常样本，不将每秒采样称为逐帧基准，实际写入值始终是120
 
-调用链为 `SteamLinuxRuntime_4/_v2-entry-point → dwproton run → cmd.exe → 新 EXE`，同 prefix、XWayland 和 MangoHUD；尚未运行现有 Steam shortcut、BetterGI 或 `game-performance`，因此不构成完整启动链接入验收，现有批处理保持原样
+上述30分钟及前4轮生命周期试验调用链为 `SteamLinuxRuntime_4/_v2-entry-point → dwproton run → cmd.exe → 新 EXE`，同 prefix、XWayland 和 MangoHUD；当时未执行Steam shortcut、BetterGI或 `game-performance`，不将这些历史结果扩大为完整启动链或本次不同才写的验证
+
+2026-09-19 `04:11:35–04:21:46 +08:00`，按用户本轮明确授权，通过真实入口 `steam://rungameid/10009322670912438272` 完成首轮完整链试验，构建对应实现提交 `a6cf71d`、SHA-256 `e949e68be5bea2dac65b1dcc5f538c453f004c11ac44462f27f1ae0b7dcd63c6`，实际链为 `Steam → game-performance → SteamLinuxRuntime_4 → dwproton → cmd.exe → BetterGI与控制器 → YuanShen.exe`
+
+该轮进入世界后HUD为121FPS／8.2ms，实际写入目标始终120；实际Ctrl+C后控制器消失而游戏与BetterGI存活，正常关闭游戏后BetterGI继续运行且电源配置仍为performance，正常关闭BetterGI后37个已追踪PID全部从Steam跟踪列表移除，Steam结束运行状态、最外层包装进程退出0，电源配置恢复power-saver，idle inhibit结束时为disabled
+
+Steam对本轮Wine子进程报告退出码-1，未捕获控制器实际Win32退出码或STOPPED尾句，因此只确认控制器退出及游戏独立存活，不声称本轮控制器退出0；BetterGI `0.65.0` 只验证启动，未验证截图或自动化
+
+原批处理备份为当前prefix中的 `C:\genshin_bgi_unlock.cmd.before-genshin-uncap-20260919`，仅末行替换为 `"C:\genshin-uncap.exe" --game "C:\Program Files\miHoYo Launcher\games\Genshin Impact Game\YuanShen.exe" --fps 120`，其余内容保持不变，接入保留；安装、启动、进程与观测证据分别为 `target/evidence/steam-chain-{install,run,processes,observations}.json` 和 `steam-chain-gameprocess.log`，均属于忽略的本机证据，不保留含账号标识的游戏截图
 
 20 秒宿主进程采样中，控制器 CPU 为单核约 0.05%，RSS 8240 KiB，主动上下文切换约 41.09 次/秒；`VmHWM` 为 430732 KiB，第二轮100ms采样将峰值定位在Launching阶段、早于Launched PID与模块扫描，内部具体分配来源未跟踪，不能只用稳态8MiB描述启动内存，也不能把上下文切换直接等同精确唤醒次数
 
@@ -77,7 +89,7 @@ Wine 自建假目标已验证 Unicode／空格／空参数／引号／尾随反�
 
 | 实验 | 当前状态 | 已有证据与边界 |
 | --- | --- | --- |
-| PE、扫描、参数与地址纯逻辑 | PASS | Linux 7 项和 Wine 执行的 Windows 8 项通过，未覆盖事项见任务表 |
+| PE、扫描、参数与地址纯逻辑 | PASS | Linux7项通过；新版Wine执行的Windows库9项另含读写与条件写入检查，未覆盖事项见任务表 |
 | Windows EXE 构建及 imports 检查 | PASS | GNU release 构建、PE32+ 控制台格式及 imports 已检查，最终大小和哈希记录在 build.json |
 | 自建 Windows 假目标已列场景 | PASS | 启动、参数、探针、覆盖、重复拒绝、强制停止和游戏先退出 |
 | 假目标定向 CTRL_BREAK 诊断 | FAIL | 退出码 1，假目标仍存活，最小 C 及本机二进制确认 Wine SIGQUIT 分发路径，测试默认忽略但未修复 runner |
@@ -85,6 +97,9 @@ Wine 自建假目标已验证 Unicode／空格／空参数／引号／尾随反�
 | 当前 Proton 只读探针 | PASS | 候选、模块、初始化 -1→60、零写入及退出码 0 已留存 |
 | 500 ms 真实外部写入初步试验 | PASS | 120 FPS 已在游戏、菜单和设置 HUD 实测，完整场景仍待验收；无需尝试更快周期 |
 | 真实30分钟与3次退出循环 | PASS | 完成连续记录及Ctrl+C、关闭控制台、强制结束、游戏先退出4轮，具体边界见任务表 |
+| 首轮真实完整Steam链 | PASS | 提交a6cf71d对应e949e68b构建经真实入口启动、世界HUD121、独立退出与wrapper清理通过；BetterGI仅验证启动 |
+| 500 ms检查、不同才写的新版窄测 | PASS | 新版a8b84948构建，Linux7项、Windows库9项和进程4项通过，已知诊断忽略1项，之前60秒超时过滤；无写权限句柄证明相同值无需写API，不同值仍尝试写入 |
+| 不同才写的新版完整Steam复验 | PASS | a8b84948构建经同一入口进入世界HUD121，游戏先退出后控制器结束，关闭BetterGI后36个PID清理、wrapper退出0；未再运行30分钟，不扩张旧构建证据 |
 | CPU、内存初步测量 | PASS | 20 秒样本 CPU 0.05% 单核、RSS 8240 KiB、VmHWM 430732 KiB；启动增量和精确唤醒仍未验证 |
 
 无匹配或读写被拒绝时保留阶段、Win32 错误和候选证据并标记 `BLOCKED`；外部写入不可行时不新增第二套后端，行为或执行架构变更另行评审

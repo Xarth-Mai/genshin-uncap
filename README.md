@@ -1,8 +1,8 @@
 # genshin-uncap
 
-小型 Windows x64 Rust FPS 控制器，启动游戏后从外部周期写入固定目标值，退出工具即停止写入
+小型 Windows x64 Rust FPS 控制器，启动游戏后从外部周期检查 FPS 变量，仅当前值与固定目标不同时写入，退出工具即停止写入
 
-当前已在本机 dwproton 上完成 120 FPS 连续 30 分钟及多次退出试验，剧情过场和完整 Steam／BetterGI 接入等仍未验收；适用范围与逐项证据见 [验收记录](specs/001-fps-control/tasks.md)
+既有构建已在本机 dwproton 上完成 120 FPS 连续 30 分钟、多次退出及完整 Steam 启动链试验；本次新增的“不同才写”已通过窄测和真实 Steam 启动、世界 FPS、游戏先退出复验，剧情过场和 BetterGI 自动化尚未验证，构建与逐项证据见 [验收记录](specs/001-fps-control/tasks.md)
 
 ## 使用
 
@@ -11,13 +11,13 @@ genshin-uncap.exe --game "C:\Program Files\miHoYo Launcher\games\Genshin Impact 
 genshin-uncap.exe --probe --game "C:\Program Files\miHoYo Launcher\games\Genshin Impact Game\YuanShen.exe"
 ```
 
-`--game` 必填，`--fps` 默认 120，允许 1–120；`--` 后的参数原样传给游戏，运行期间不调节数值
+当前没有配置文件，使用命令行参数；`--game` 必填，`--fps` 默认 120，允许 1–120；`--` 后的参数原样传给游戏，运行期间不调节数值
 
 `--probe` 只启动、读取和定位，绝不写入游戏内存；结束后游戏继续运行，再次运行工具前需自行退出游戏
 
 通过 Ctrl+C 或关闭控制台退出工具，不恢复任何 FPS 值；最后写入值可能保留到游戏再次更新限帧，工具不会主动终止游戏
 
-当前固定每 500 ms 写入一次，候选就绪前只读等待，目标上限严格为 120
+固定每 500 ms 读取并校验页面、定位指令和 FPS 值，仅当前值不等于固定目标时写入；候选就绪前只读等待，目标上限严格为 120，不据此承诺 CPU 或内存收益
 
 仅操作本次启动的进程，不 attach；已运行游戏或另一控制器存在时拒绝启动，错误或不可信地址停止操作，不自动切换注入实现
 
@@ -60,9 +60,9 @@ env DISPLAY=:0 WAYLAND_DISPLAY=wayland-1 WINEPREFIX="$PWD/target/test-prefix" WI
 
 ## 接入边界
 
-已完成真实只读、120 FPS 写入、30 分钟及四种退出路径检查；剧情过场与完整 Steam／BetterGI 启动链等尚未验收，因此当前保留旧批处理调用，未安装替换
+用户明确授权后，构建 `e949e68b` 经真实 Steam 入口完成启动、世界约 121 FPS 和退出链检查，BetterGI `0.65.0` 仅验证启动；新版 `a8b84948` 另经同一 Steam 入口复验，标题和世界 HUD 约 121 FPS，游戏先退出后控制器自动结束
 
-保留现有 runner、prefix、工作目录和 BetterGI 顺序；验收通过后仅备份并替换旧解锁器调用，CLI 显式指定路径和 FPS
+已安装至当前 prefix 的 `C:\genshin-uncap.exe`，原批处理备份为 `C:\genshin_bgi_unlock.cmd.before-genshin-uncap-20260919`，仅末行替换为新 EXE 的显式游戏路径和 `--fps 120`，保留 runner、prefix、工作目录和 BetterGI 顺序；回退时将备份复制回 `C:\genshin_bgi_unlock.cmd`
 
 本实现没有远程线程、DLL、shellcode、驱动、隐藏、权限提升、自动补丁下载或遥测
 
