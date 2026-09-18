@@ -1,6 +1,24 @@
 use std::{ffi::OsString, path::PathBuf};
 
-pub const USAGE: &str = "genshin-uncap --game <path> [--fps <1..120>] [--probe] [-- <game arguments...>]\nDefault: 120 FPS; exit stops writing without restoring a value\n--probe: launch, locate and report only; never write game memory";
+pub const USAGE: &str = "Usage: genshin-uncap --game <path> [--fps <1..120>] [--hidden] [--probe] [-- <game arguments...>]\n       genshin-uncap --help | --version\n\n--game <path>  Game executable (required to launch)\n--fps <1..120> Target FPS (default: 120)\n--hidden      No controller console; logs in %LOCALAPPDATA%\\genshin-uncap\n--probe       Launch, locate and report only; never write game memory\n-h, --help    Show this help without launching the game\n-V, --version Show version and Rust build information without launching the game\n--            Forward all remaining arguments to the game\n\nF10 in the game: pause and restore the initial FPS value, or resume\nExit stops writing without restoring a value";
+
+pub const VERSION: &str = concat!(
+    env!("CARGO_PKG_NAME"),
+    " ",
+    env!("CARGO_PKG_VERSION"),
+    "\n",
+    env!("BUILD_RUSTC"),
+    "\ntarget: ",
+    env!("BUILD_TARGET"),
+    "\nprofile: ",
+    env!("BUILD_PROFILE"),
+);
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Action {
+    Run(Options),
+    Print(&'static str),
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Options {
@@ -10,15 +28,17 @@ pub struct Options {
     pub args: Vec<OsString>,
 }
 
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Options>, String> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Action, String> {
     let mut args = args.into_iter();
     let mut game = None;
     let mut fps = None;
     let mut probe = false;
+    let mut hidden = false;
     let mut forwarded = Vec::new();
     while let Some(arg) = args.next() {
         match arg.to_str() {
-            Some("--help" | "-h") => return Ok(None),
+            Some("--help" | "-h") => return Ok(Action::Print(USAGE)),
+            Some("--version" | "-V") => return Ok(Action::Print(VERSION)),
             Some("--game") if game.is_none() => {
                 game = Some(PathBuf::from(args.next().ok_or("--game requires a path")?));
             }
@@ -35,6 +55,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Options>
                 fps = Some(value);
             }
             Some("--probe") if !probe => probe = true,
+            Some("--hidden") if !hidden => hidden = true,
             Some("--") => {
                 forwarded.extend(args);
                 break;
@@ -46,12 +67,28 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Options>
     if game.as_os_str().is_empty() {
         return Err("game path is empty".into());
     }
-    Ok(Some(Options {
+    Ok(Action::Run(Options {
         game,
         fps: fps.unwrap_or(120),
         probe,
         args: forwarded,
     }))
+}
+
+// Choose the output before parsing so hidden help and argument errors never create a console
+pub fn hidden_requested(args: &[OsString]) -> bool {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("--") => break,
+            Some("--game" | "--fps") => {
+                args.next();
+            }
+            Some("--hidden") => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -61,9 +98,43 @@ mod tests {
         a.iter().map(OsString::from).collect()
     }
 
+    fn run_options(input: &[&str]) -> Options {
+        let Action::Run(options) = parse(args(input)).unwrap() else {
+            panic!("expected game options");
+        };
+        options
+    }
+
+    #[test]
+    fn informational_flags_do_not_require_a_game_and_respect_forwarding() {
+        for (flag, text) in [
+            ("--help", USAGE),
+            ("-h", USAGE),
+            ("--version", VERSION),
+            ("-V", VERSION),
+        ] {
+            assert_eq!(parse(args(&[flag])), Ok(Action::Print(text)));
+            assert_eq!(parse(args(&["--hidden", flag])), Ok(Action::Print(text)));
+            assert!(hidden_requested(&args(&[flag, "--hidden"])));
+            assert_eq!(
+                run_options(&["--game", "g.exe", "--", flag]).args,
+                args(&[flag])
+            );
+            assert_eq!(run_options(&["--game", flag]).game, PathBuf::from(flag));
+        }
+        assert!(VERSION.starts_with(concat!(
+            env!("CARGO_PKG_NAME"),
+            " ",
+            env!("CARGO_PKG_VERSION"),
+            "\nrustc "
+        )));
+        assert!(VERSION.contains(concat!("\ntarget: ", env!("BUILD_TARGET"))));
+        assert!(VERSION.ends_with(concat!("\nprofile: ", env!("BUILD_PROFILE"))));
+    }
+
     #[test]
     fn defaults_unicode_and_exact_argument_forwarding() {
-        let options = parse(args(&[
+        let options = run_options(&[
             "--game",
             "C:\\原 神\\game.exe",
             "--",
@@ -72,9 +143,7 @@ mod tests {
             "x\"y",
             "--fps",
             "999",
-        ]))
-        .unwrap()
-        .unwrap();
+        ]);
         assert_eq!(options.game, PathBuf::from("C:\\原 神\\game.exe"));
         assert_eq!(options.fps, 120);
         assert_eq!(options.args, args(&["", "a b", "x\"y", "--fps", "999"]));
@@ -85,10 +154,7 @@ mod tests {
     fn invalid_input_and_duplicates_are_rejected() {
         for value in ["1", "120"] {
             assert_eq!(
-                parse(args(&["--game", "g.exe", "--fps", value]))
-                    .unwrap()
-                    .unwrap()
-                    .fps,
+                run_options(&["--game", "g.exe", "--fps", value]).fps,
                 value.parse::<i32>().unwrap()
             );
         }
@@ -102,13 +168,33 @@ mod tests {
             vec!["--game", "g", "--unknown"],
             vec!["--game", "g", "--fps", "60", "--fps", "120"],
             vec!["--game", "g", "--probe", "--probe"],
+            vec!["--game", "g", "--hidden", "--hidden"],
         ] {
             assert!(parse(args(&a)).is_err());
         }
-        let options = parse(args(&["--game", "g.exe", "--fps", "120", "--probe"]))
-            .unwrap()
-            .unwrap();
+        let options = run_options(&["--game", "g.exe", "--fps", "120", "--probe"]);
         assert_eq!(options.fps, 120);
         assert!(options.probe);
+    }
+
+    #[test]
+    fn hidden_applies_to_controller_options_only() {
+        let options = run_options(&["--hidden", "--game", "g.exe", "--", "--hidden"]);
+        assert_eq!(options.args, args(&["--hidden"]));
+        for input in [
+            vec!["--hidden", "--help"],
+            vec!["--help", "--hidden"],
+            vec!["--unknown", "--hidden"],
+            vec!["--game", "g.exe", "--hidden"],
+        ] {
+            assert!(hidden_requested(&args(&input)));
+        }
+        for input in [
+            vec!["--game", "g.exe", "--", "--hidden"],
+            vec!["--game", "--hidden"],
+            vec!["--fps", "--hidden"],
+        ] {
+            assert!(!hidden_requested(&args(&input)));
+        }
     }
 }

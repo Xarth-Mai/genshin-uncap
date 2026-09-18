@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, WAIT_OBJECT_0},
+    Foundation::{CloseHandle, HWND, WAIT_OBJECT_0},
     System::{
         Console::{
             AllocConsole, CTRL_BREAK_EVENT, CTRL_C_EVENT, FreeConsole, GenerateConsoleCtrlEvent,
@@ -21,6 +21,13 @@ use windows_sys::Win32::{
             CREATE_NEW_PROCESS_GROUP, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
         },
     },
+    UI::{
+        Input::KeyboardAndMouse::{
+            INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_CONTROL,
+            VK_F10,
+        },
+        WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow},
+    },
 };
 
 const CONTROLLER: &str = env!("CARGO_BIN_EXE_genshin-uncap");
@@ -29,6 +36,7 @@ static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 enum Fixture {
     Fps,
+    Window(i32),
     DelayedReady,
     MissingText,
     Ambiguous,
@@ -41,6 +49,13 @@ fn encoded(value: &OsStr) -> String {
         .encode_wide()
         .map(|word| format!("{word:04x}"))
         .collect()
+}
+
+fn sample_values(report: &str) -> impl Iterator<Item = &str> {
+    report
+        .lines()
+        .filter_map(|line| line.strip_prefix("SAMPLE "))
+        .filter_map(|line| line.split_whitespace().nth(1))
 }
 
 fn wait_until(mut condition: impl FnMut() -> bool, context: &str) {
@@ -68,9 +83,11 @@ impl Session {
 
     fn with_creation_flags(probe: bool, fixture: Fixture, flags: u32) -> Self {
         let example = match fixture {
-            Fixture::Fps | Fixture::DelayedReady | Fixture::MissingText | Fixture::Ambiguous => {
-                "fake_game"
-            }
+            Fixture::Fps
+            | Fixture::Window(_)
+            | Fixture::DelayedReady
+            | Fixture::MissingText
+            | Fixture::Ambiguous => "fake_game",
             Fixture::NoPattern | Fixture::Timeout => "no_pattern",
         };
         let source = Path::new(CONTROLLER)
@@ -165,6 +182,11 @@ impl Session {
         if matches!(fixture, Fixture::DelayedReady) {
             command.arg("--fixture-delayed-ready");
         }
+        if let Fixture::Window(initial) = fixture {
+            command
+                .args(["--fixture-window", "--fixture-initial-fps"])
+                .arg(initial.to_string());
+        }
         let child = command
             .creation_flags(flags)
             .stdin(Stdio::null())
@@ -188,10 +210,8 @@ impl Session {
     }
 
     fn samples(&self) -> Vec<i32> {
-        self.contents()
-            .lines()
-            .filter_map(|line| line.strip_prefix("SAMPLE "))
-            .filter_map(|line| line.split_whitespace().nth(1)?.parse().ok())
+        sample_values(&self.contents())
+            .filter_map(|value| value.parse().ok())
             .collect()
     }
 
@@ -263,14 +283,7 @@ impl Session {
         wait_until(|| self.contents().contains("RESET "), "fake self reset");
         sleep(Duration::from_millis(1200));
         let report = self.contents();
-        let samples: Vec<_> = report
-            .split_once("RESET ")
-            .unwrap()
-            .1
-            .lines()
-            .filter_map(|line| line.strip_prefix("SAMPLE "))
-            .filter_map(|line| line.split_whitespace().nth(1))
-            .collect();
+        let samples: Vec<_> = sample_values(report.split_once("RESET ").unwrap().1).collect();
         assert!(
             samples.len() >= 20,
             "fake game did not continue after controller exit"
@@ -291,6 +304,242 @@ impl Drop for Session {
         }
         // Keep logs on failure; fixtures also enforce their own finite lifetime
         eprintln!("fixture evidence: {}", self.root.display());
+    }
+}
+
+fn fixture_key(window: HWND, pid: u32, key: u16, down: bool) -> bool {
+    if down {
+        let mut owner = 0;
+        unsafe {
+            GetWindowThreadProcessId(window, &mut owner);
+        }
+        if owner != pid || unsafe { GetForegroundWindow() } != window {
+            return false;
+        }
+    }
+    // Always release keys this helper injected, even if focus changed while held
+    let input = INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: key,
+                dwFlags: if down { 0 } else { KEYEVENTF_KEYUP },
+                ..Default::default()
+            },
+        },
+    };
+    unsafe { SendInput(1, &input, std::mem::size_of::<INPUT>() as i32) == 1 }
+}
+
+struct HeldFixtureKey {
+    window: HWND,
+    pid: u32,
+    key: u16,
+    held: bool,
+}
+
+impl HeldFixtureKey {
+    fn press(window: HWND, pid: u32, key: u16) -> Self {
+        assert!(
+            fixture_key(window, pid, key, true),
+            "fixture lost foreground or keyboard input failed"
+        );
+        Self {
+            window,
+            pid,
+            key,
+            held: true,
+        }
+    }
+
+    fn release(mut self) {
+        self.held = !fixture_key(self.window, self.pid, self.key, false);
+        assert!(!self.held, "fixture key release failed");
+    }
+}
+
+impl Drop for HeldFixtureKey {
+    fn drop(&mut self) {
+        if self.held && !fixture_key(self.window, self.pid, self.key, false) {
+            eprintln!("cannot release injected fixture key");
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires an isolated foreground desktop; presses keys only with verified fixture focus"]
+fn foreground_f10_modes() {
+    let _serial = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    for (baseline, fault) in [(30, false), (60, false), (120, false), (60, true)] {
+        let mut controller = Session::start(false, Fixture::Window(baseline));
+        let log = || fs::read_to_string(&controller.log).unwrap_or_default();
+        wait_until(
+            || log().contains("CHECKING:") && controller.samples().last() == Some(&120),
+            "window fixture ready",
+        );
+        let report = controller.contents();
+        let field = |prefix| {
+            report
+                .lines()
+                .find_map(|line| line.strip_prefix(prefix))
+                .unwrap()
+        };
+        let pid = field("PID ").parse().unwrap();
+        let window = usize::from_str_radix(field("HWND "), 16).unwrap() as HWND;
+        unsafe {
+            SetForegroundWindow(window);
+        }
+        wait_until(
+            || unsafe { GetForegroundWindow() == window },
+            "fixture foreground",
+        );
+        sleep(Duration::from_millis(150));
+        let press = |duration| {
+            let key = HeldFixtureKey::press(window, pid, VK_F10);
+            sleep(duration);
+            key.release();
+            sleep(Duration::from_millis(100));
+        };
+
+        press(Duration::from_millis(800));
+        wait_until(|| log().contains("PAUSED:"), "first F10 pause");
+        assert_eq!(
+            log().matches("PAUSED:").count(),
+            1,
+            "long press toggled twice"
+        );
+        assert_eq!(controller.samples().last(), Some(&baseline));
+
+        let changed = if fault {
+            121
+        } else if baseline == 30 {
+            60
+        } else {
+            30
+        };
+        fs::write(&controller.reset, changed.to_string()).unwrap();
+        wait_until(
+            || controller.contents().contains("RESET "),
+            "paused target reset",
+        );
+        sleep(Duration::from_millis(1200));
+        let report = controller.contents();
+        let paused_values: Vec<i32> = sample_values(report.split_once("RESET ").unwrap().1)
+            .filter_map(|value| value.parse().ok())
+            .collect();
+        assert!(paused_values.len() >= 20);
+        assert!(paused_values.iter().all(|&value| value == changed));
+        if fault {
+            assert!(
+                controller.child.try_wait().unwrap().is_none(),
+                "paused controller read the invalid fixture value"
+            );
+            let sample_count = controller.samples().len();
+            press(Duration::from_millis(100));
+            assert_eq!(controller.finished().code(), Some(1));
+            let failure = fs::read_to_string(&controller.log).unwrap();
+            assert!(failure.contains("unverified FPS value 121; stopping"));
+            assert!(!failure.contains("RESUMED:"));
+            wait_until(
+                || controller.samples().len() >= sample_count + 20,
+                "fake target survives rejected resume",
+            );
+            assert!(
+                controller.samples()[sample_count..]
+                    .iter()
+                    .all(|&value| value == 121)
+            );
+            controller.stop_game();
+            continue;
+        }
+        let control = HeldFixtureKey::press(window, pid, VK_CONTROL);
+        press(Duration::from_millis(100));
+        control.release();
+        assert!(!log().contains("RESUMED:"), "modified F10 resumed control");
+        sleep(Duration::from_millis(100));
+
+        press(Duration::from_millis(100));
+        wait_until(|| log().contains("RESUMED:"), "F10 resume");
+        wait_until(
+            || controller.samples().last() == Some(&120),
+            "resumed target",
+        );
+        press(Duration::from_millis(100));
+        wait_until(|| log().matches("PAUSED:").count() == 2, "second F10 pause");
+        wait_until(
+            || controller.samples().last() == Some(&baseline),
+            "immutable startup baseline restored",
+        );
+        controller.stop_game();
+        assert!(controller.finished().success());
+    }
+}
+
+#[test]
+fn informational_flags_exit_without_launching() {
+    let _serial = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    for hidden in [false, true] {
+        for (flag, expected) in [
+            ("--help", genshin_uncap::cli::USAGE),
+            ("--version", genshin_uncap::cli::VERSION),
+        ] {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let directory = std::env::temp_dir().join(format!(
+                "genshin-uncap-info-{}-{timestamp}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&directory).unwrap();
+            let mut command = Command::new(CONTROLLER);
+            command.arg(flag);
+            if hidden {
+                command.arg("--hidden");
+            }
+            let mut child = command
+                .env("LOCALAPPDATA", &directory)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(6);
+            while child.try_wait().unwrap().is_none() {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!(
+                        "informational command did not exit; evidence: {}",
+                        directory.display()
+                    );
+                }
+                sleep(Duration::from_millis(25));
+            }
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success());
+            assert!(output.stderr.is_empty());
+            if hidden {
+                assert!(output.stdout.is_empty());
+                let logs: Vec<_> = fs::read_dir(directory.join("genshin-uncap"))
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect();
+                assert_eq!(logs.len(), 1);
+                let contents = fs::read_to_string(&logs[0]).unwrap();
+                assert_eq!(
+                    contents,
+                    format!("genshin-uncap: hidden startup\n{expected}\n")
+                );
+            } else {
+                assert_eq!(
+                    String::from_utf8(output.stdout).unwrap(),
+                    format!("{expected}\n")
+                );
+                assert!(!directory.join("genshin-uncap").exists());
+            }
+            fs::remove_dir_all(directory).unwrap();
+        }
     }
 }
 
@@ -413,11 +662,7 @@ fn delayed_ready_stays_read_only_until_stable() {
     let (before, after) = report
         .split_once("READY ")
         .expect("fixture never became ready");
-    let before_values: Vec<_> = before
-        .lines()
-        .filter_map(|line| line.strip_prefix("SAMPLE "))
-        .filter_map(|line| line.split_whitespace().nth(1))
-        .collect();
+    let before_values: Vec<_> = sample_values(before).collect();
     assert!(before_values.len() >= 10);
     assert!(
         before_values.iter().all(|&value| value == "-1"),

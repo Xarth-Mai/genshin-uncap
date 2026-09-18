@@ -1,12 +1,9 @@
-use crate::{cli::Options, scan};
+use crate::{cli::Options, hotkey::F10Edge, output::Output, scan};
 use std::{
     collections::BTreeMap,
     ffi::{OsStr, OsString},
     mem::{size_of, zeroed},
-    os::windows::{
-        ffi::{OsStrExt, OsStringExt},
-        process::CommandExt,
-    },
+    os::windows::{ffi::OsStringExt, process::CommandExt},
     path::Path,
     process::{Command, Stdio},
     ptr::null,
@@ -21,17 +18,16 @@ use windows_sys::Win32::{
         Memory::*,
         Threading::*,
     },
+    UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
 };
 
 const PERIOD: Duration = Duration::from_millis(500);
 const INIT_TIMEOUT: Duration = Duration::from_secs(60);
+const INPUT_PERIOD: Duration = Duration::from_millis(20);
 static STOP: AtomicBool = AtomicBool::new(false);
 
 fn error(stage: &str) -> String {
     format!("{stage}: {}", std::io::Error::last_os_error())
-}
-fn wide(s: &OsStr) -> Vec<u16> {
-    s.encode_wide().chain(Some(0)).collect()
 }
 
 // Each handle has exactly one owner; dropping never terminates its process
@@ -300,6 +296,7 @@ fn locate(
     base: usize,
     module_size: usize,
     deadline: Instant,
+    output: &mut Output,
 ) -> Result<Option<Candidate>, String> {
     let dos = read(process, base, 64)?;
     let prefix = read(process, base, scan::pe_coff_header_len(&dos)?)?;
@@ -362,9 +359,9 @@ fn locate(
                 ));
             }
             validate_page(process, base, address)?;
-            println!(
+            output.line(format_args!(
                 "Candidate: instruction={instruction:#x}, FPS={address:#x}, bytes={evidence:02x?}"
-            );
+            ))?;
             candidates.entry(address).or_insert(Candidate {
                 address,
                 instruction,
@@ -398,20 +395,37 @@ fn update_fps(process: &Handle, candidate: &Candidate, target: i32) -> Result<bo
     Ok(true)
 }
 
-pub fn run(options: Options) -> Result<(), String> {
+fn f10_pressed(key: &mut F10Edge, game_pid: u32) -> bool {
+    unsafe {
+        let mut foreground_pid = 0;
+        GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground_pid);
+        let modified = [VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN]
+            .iter()
+            .any(|&key| GetAsyncKeyState(i32::from(key)) < 0);
+        key.pressed(
+            foreground_pid == game_pid,
+            GetAsyncKeyState(i32::from(VK_F10)) < 0,
+            modified,
+        )
+    }
+}
+
+pub fn run(options: Options, output: &mut Output) -> Result<(), String> {
     let _handler = ConsoleHandler::install()?;
-    let result = run_controller(options);
+    let result = run_controller(options, output);
     if STOP.load(Ordering::SeqCst) {
-        println!("STOPPED: user requested exit; no FPS value restored");
+        output.line(format_args!(
+            "STOPPED: user requested exit; no FPS value restored on exit"
+        ))?;
         Ok(())
     } else {
         result
     }
 }
 
-fn run_controller(options: Options) -> Result<(), String> {
-    let name = wide(OsStr::new("Local\\genshin-uncap-v1-controller"));
-    let mutex = unsafe { CreateMutexW(null(), 0, name.as_ptr()) };
+fn run_controller(options: Options, output: &mut Output) -> Result<(), String> {
+    let name = windows_sys::core::w!("Local\\genshin-uncap-v1-controller");
+    let mutex = unsafe { CreateMutexW(null(), 0, name) };
     let mutex_error = unsafe { GetLastError() };
     let _mutex = Handle::new(mutex, "controller mutex")?;
     if mutex_error == ERROR_ALREADY_EXISTS {
@@ -426,13 +440,13 @@ fn run_controller(options: Options) -> Result<(), String> {
         return Err("game is already running; close it before starting this tool".into());
     }
     if STOP.load(Ordering::SeqCst) {
-        println!("Cancelled before launch");
+        output.line(format_args!("Cancelled before launch"))?;
         return Ok(());
     }
-    println!(
+    output.line(format_args!(
         "Launching: {game:?}; target={} FPS; probe={}",
         options.fps, options.probe
-    );
+    ))?;
     // The child must not share our console; closing this window must leave it alive
     let child = Command::new(&game)
         .args(&options.args)
@@ -457,11 +471,11 @@ fn run_controller(options: Options) -> Result<(), String> {
     )?;
     let pid = child.id();
     drop(child);
-    println!("Launched Win32 PID={pid}; waiting for module");
+    output.line(format_args!("Launched Win32 PID={pid}; waiting for module"))?;
     let deadline = Instant::now() + INIT_TIMEOUT;
     let (base, size) = loop {
         if !initializing(&process)? {
-            println!("Cancelled during initialization");
+            output.line(format_args!("Cancelled during initialization"))?;
             return Ok(());
         }
         if let Some(module) = base_module(pid, &game)? {
@@ -472,21 +486,23 @@ fn run_controller(options: Options) -> Result<(), String> {
         }
         wait(&process, Duration::from_millis(100))?;
     };
-    println!("Module: base={base:#x}, image_size={size:#x}");
+    output.line(format_args!("Module: base={base:#x}, image_size={size:#x}"))?;
     let mut pending_logged = false;
     let candidate = loop {
         if !initializing(&process)? {
-            println!("Cancelled during initialization");
+            output.line(format_args!("Cancelled during initialization"))?;
             return Ok(());
         }
-        if let Some(candidate) = locate(&process, base, size, deadline)? {
+        if let Some(candidate) = locate(&process, base, size, deadline, output)? {
             break candidate;
         }
         if Instant::now() >= deadline {
             return Err("locate timeout: no FPS candidate; unsupported game build".into());
         }
         if !pending_logged {
-            println!("Waiting for FPS signature in initialized image");
+            output.line(format_args!(
+                "Waiting for FPS signature in initialized image"
+            ))?;
             pending_logged = true;
         }
         wait(&process, Duration::from_secs(1))?;
@@ -503,7 +519,9 @@ fn run_controller(options: Options) -> Result<(), String> {
         }
         let observed = value(&process, &candidate)?;
         if last != Some(observed) {
-            println!("Read-only initialization: observed FPS value={observed}");
+            output.line(format_args!(
+                "Read-only initialization: observed FPS value={observed}"
+            ))?;
             valid_since = if (1..=120).contains(&observed) {
                 Some(Instant::now())
             } else {
@@ -521,36 +539,66 @@ fn run_controller(options: Options) -> Result<(), String> {
         }
         wait(&process, Duration::from_millis(100))?;
     };
-    println!(
+    output.line(format_args!(
         "Located: FPS address={:#x}, observed={initial}; candidate is not a measured frame rate",
         candidate.address
-    );
+    ))?;
     if options.probe {
-        println!("PROBE COMPLETE: zero writes; game left running");
+        output.line(format_args!(
+            "PROBE COMPLETE: zero writes; game left running"
+        ))?;
         return Ok(());
     }
-    println!(
-        "CHECKING: target {} FPS every {} ms; writing only when different",
+    output.line(format_args!(
+        "CHECKING: target {} FPS every {} ms; writing only when different; F10 pauses/restores startup value={initial}",
         options.fps,
         PERIOD.as_millis()
-    );
+    ))?;
+    let mut key = F10Edge::default();
+    let mut paused = false;
+    let mut next_check = Instant::now();
     let mut wrote = false;
     let outcome = (|| -> Result<(), String> {
         while running(&process)? {
-            validate_page(&process, base, candidate.address)?;
-            if read(&process, candidate.instruction, candidate.evidence.len())?
-                != candidate.evidence
-            {
-                return Err("locator instruction changed; stopping".into());
+            let toggle = f10_pressed(&mut key, pid);
+            if !running(&process)? {
+                break;
             }
-            if update_fps(&process, &candidate, options.fps)? && !wrote {
-                println!(
-                    "WRITING: set {} FPS; actual frame rate requires measurement",
+            if toggle || (!paused && Instant::now() >= next_check) {
+                validate_page(&process, base, candidate.address)?;
+                if read(&process, candidate.instruction, candidate.evidence.len())?
+                    != candidate.evidence
+                {
+                    return Err("locator instruction changed; stopping".into());
+                }
+                let target = if toggle && !paused {
+                    initial
+                } else {
                     options.fps
-                );
-                wrote = true;
+                };
+                let changed = update_fps(&process, &candidate, target)?;
+                if !running(&process)? {
+                    break;
+                }
+                if toggle {
+                    paused = !paused;
+                    if paused {
+                        output.line(format_args!(
+                            "PAUSED: restored startup FPS value={initial}; periodic writes stopped"
+                        ))?;
+                    } else {
+                        output.line(format_args!("RESUMED: target {} FPS", options.fps))?;
+                    }
+                } else if changed && !wrote {
+                    output.line(format_args!(
+                        "WRITING: set {} FPS; actual frame rate requires measurement",
+                        options.fps
+                    ))?;
+                    wrote = true;
+                }
+                next_check = Instant::now() + PERIOD;
             }
-            if !wait(&process, PERIOD)? {
+            if !wait(&process, INPUT_PERIOD)? {
                 break;
             }
         }
@@ -562,7 +610,9 @@ fn run_controller(options: Options) -> Result<(), String> {
             return Err(failure);
         }
     }
-    println!("STOPPED: no further writes; no FPS value restored");
+    output.line(format_args!(
+        "STOPPED: no further writes; no FPS value restored on exit"
+    ))?;
     Ok(())
 }
 
