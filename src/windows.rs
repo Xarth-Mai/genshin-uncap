@@ -1,4 +1,10 @@
-use crate::{cli::Options, hotkey::F10Edge, output::Output, scan};
+use crate::{
+    cli::Options,
+    control::{Control, PERIOD},
+    hotkey::F10Edge,
+    output::Output,
+    scan,
+};
 use std::{
     collections::BTreeMap,
     ffi::OsString,
@@ -21,7 +27,6 @@ use windows_sys::Win32::{
     UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
 };
 
-const PERIOD: Duration = Duration::from_millis(500);
 const INIT_TIMEOUT: Duration = Duration::from_secs(60);
 const INPUT_PERIOD: Duration = Duration::from_millis(20);
 const AUTO_GAME_NAMES: [&str; 2] = ["YuanShen.exe", "GenshinImpact.exe"];
@@ -610,8 +615,7 @@ fn run_controller(options: Options, output: &mut Output) -> Result<(), String> {
         PERIOD.as_millis()
     ))?;
     let mut key = F10Edge::default();
-    let mut paused = false;
-    let mut next_check = Instant::now();
+    let mut control = Control::new(initial, options.fps, Instant::now());
     let mut wrote = false;
     let outcome = (|| -> Result<(), String> {
         while running(&process)? {
@@ -619,25 +623,19 @@ fn run_controller(options: Options, output: &mut Output) -> Result<(), String> {
             if !running(&process)? {
                 break;
             }
-            if toggle || (!paused && Instant::now() >= next_check) {
+            let changed = control.step(Instant::now(), toggle, |target| {
                 validate_page(&process, base, candidate.address)?;
                 if read(&process, candidate.instruction, candidate.evidence.len())?
                     != candidate.evidence
                 {
                     return Err("locator instruction changed; stopping".into());
                 }
-                let target = if toggle && !paused {
-                    initial
-                } else {
-                    options.fps
-                };
                 let changed = update_fps(&process, &candidate, target)?;
-                if !running(&process)? {
-                    break;
-                }
+                Ok(running(&process)?.then_some(changed))
+            })?;
+            if let Some(changed) = changed {
                 if toggle {
-                    paused = !paused;
-                    if paused {
+                    if control.paused() {
                         output.line(format_args!(
                             "PAUSED: restored startup FPS value={initial}; periodic writes stopped"
                         ))?;
@@ -651,7 +649,6 @@ fn run_controller(options: Options, output: &mut Output) -> Result<(), String> {
                     ))?;
                     wrote = true;
                 }
-                next_check = Instant::now() + PERIOD;
             }
             if !wait(&process, INPUT_PERIOD)? {
                 break;

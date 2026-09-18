@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod control;
 pub mod hotkey;
 #[cfg(windows)]
 pub mod output;

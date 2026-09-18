@@ -597,6 +597,16 @@ fn real_windows_process_flow() {
         || controller.samples().contains(&120),
         "second controller writes 120",
     );
+    fs::write(&controller.reset, "30").unwrap();
+    wait_until(
+        || {
+            let report = controller.contents();
+            report
+                .split_once("RESET ")
+                .is_some_and(|(_, after)| sample_values(after).any(|value| value == "120"))
+        },
+        "running controller corrects the game's reset to 30",
+    );
     controller.stop_game();
     assert!(controller.finished().success());
     assert!(
