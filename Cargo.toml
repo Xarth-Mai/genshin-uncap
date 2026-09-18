@@ -1,0 +1,16 @@
+[package]
+name = "genshin-uncap"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "A small external FPS controller for a validated Proton game session"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Memory", "Win32_System_Threading"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
