@@ -54,7 +54,7 @@ jobs:
           package_dir="genshin-uncap-v${version}-x86_64-pc-windows-gnu"
           mkdir -p "dist/${package_dir}"
           cp target/x86_64-pc-windows-gnu/release/genshin-uncap.exe "dist/${package_dir}/"
-          cp README.md LICENSE THIRD_PARTY_NOTICES.md "dist/${package_dir}/"
+          cp README*.md LICENSE THIRD_PARTY_NOTICES.md "dist/${package_dir}/"
           (cd dist && zip -r "${package_dir}.zip" "${package_dir}")
       - uses: actions/upload-artifact@v4
         with:

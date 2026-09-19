@@ -2,87 +2,121 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [繁体中文](README.zh-TW.md) · [日本語](README.ja.md)
 
-> Yet another Genshin Impact FPS unlocker written in Rust
+Yet another Genshin Impact FPS unlocker written in Rust
 
-Launch Genshin Impact with an FPS limit from **1 to 120**, then press **F10** to pause or resume control.
-
-Small, native, and built for players who want a higher frame-rate ceiling without changing the game files.
-
-[![Latest Release](https://img.shields.io/github/v/release/Xarth-Mai/genshin-uncap?display_name=tag&sort=semver)](https://github.com/Xarth-Mai/genshin-uncap/releases)
-[![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue.svg)](LICENSE)
+Small and native, supporting Windows and Linux (Wine / Steam Proton)
 
 ## Quick Start
 
 ### Windows
 
-Download the latest build from [Releases](https://github.com/Xarth-Mai/genshin-uncap/releases). Double-clicking the executable shows the console and detects or waits for `YuanShen.exe` or `GenshinImpact.exe`, using the default 120 FPS limit:
+Download the latest version from [Releases](https://github.com/Xarth-Mai/genshin-uncap/releases)
+
+Start the game, then run `genshin-uncap.exe`. The program automatically detects `YuanShen.exe` or `GenshinImpact.exe` and unlocks the FPS limit to 120
+
+You can also launch the game directly through this program:
 
 ```bat
 genshin-uncap.exe --game "C:\Games\Genshin Impact Game\YuanShen.exe" --fps 120
 ```
 
-To launch the game from the controller, use the game executable such as `YuanShen.exe`, not the launcher. The default FPS limit is 120.
+### Linux — Wine / Steam Proton
 
-### Steam / Proton
-
-Use the game's existing Proton prefix. Set Steam's target to `genshin-uncap.exe`, keep the existing Proton version, and add this to **Launch Options**:
+Set Steam's launch target to `genshin-uncap.exe`, keep the game's existing Proton version, and set Launch Options to:
 
 ```text
-%command% --game "C:\Games\Genshin Impact Game\YuanShen.exe" --fps 120
+%command% --game "C:\Games\Genshin Impact Game\YuanShen.exe" --fps 120 --hidden
 ```
 
-The Steam target and start-in directory use Linux paths. The `--game` path uses the Windows path inside the prefix.
+Steam's Target and Start In use Linux paths; `--game` uses a Windows path visible inside the Wine / Proton prefix
 
-## Advanced Settings
+## F10 Pause / Resume
+
+Press F10 while the game is focused to pause or resume FPS control
+
+Pausing restores the original FPS value from the start of the session; pressing F10 again reapplies the selected FPS limit
+
+## Options
 
 | Option | Description |
 | --- | --- |
-| `--game <path>` | Optional game executable to launch; omit to detect or wait for `YuanShen.exe` or `GenshinImpact.exe` |
-| `--fps <1..120>` | FPS limit; default: `120` |
-| `--hidden` | Hide the controller window and write logs to `%LOCALAPPDATA%\genshin-uncap`; ignored when `--game` is omitted |
-| `--probe` | Check the game without changing its memory |
+| `--game <path>` | Game executable to launch; omit to detect or wait for `YuanShen.exe` / `GenshinImpact.exe` |
+| `--fps <1..120>` | Set the FPS limit; default: 120 |
+| `--hidden` | Hide the controller window and write logs to `%LOCALAPPDATA%\genshin-uncap\`; ignored without `--game` |
+| `--probe` | Check whether the current game version can be recognized without modifying game memory |
 | `--help`, `-h` | Show help |
 | `--version`, `-V` | Show version and build information |
-| `-- <arguments...>` | Forward remaining arguments when launching a game; accepted and ignored without `--game` |
-
-When hidden mode is used, startup cleanup keeps at most the 10 newest controller logs.
-
-Pause and resume FPS control with **F10** while the game is focused. On pause, the controller restores the session's original FPS value. Press F10 again to resume the selected limit.
-
-The FPS limit stays fixed for the session. Restart the controller with a new `--fps` value to change it.
+| `-- <arguments...>` | Forward the remaining arguments unchanged when launching the game; ignored without `--game` |
 
 ## FAQ
 
-### Why is the actual FPS lower than the limit?
+### How do I change the FPS limit?
 
-The limit is not a performance guarantee. GPU/CPU load, graphics settings, VSync, and other limiters affect the actual FPS.
+Use `--fps` to set the desired limit, for example:
 
-### The controller says the game is already running
+```text
+--fps 90
+```
 
-When `--game` is specified, close Genshin Impact and any existing `genshin-uncap.exe`, then try again. Without `--game`, the controller attaches to one existing supported game process and refuses to choose when both supported clients are running.
+The FPS limit stays fixed for each run. To change it, restart the program with a new `--fps` value
 
-### The game updated and control stopped working
+### Where are logs saved?
 
-Keep the error output or log from `%LOCALAPPDATA%\genshin-uncap\` when reporting the issue.
+With `--hidden`, logs are saved in:
 
-### How do I stop the controller?
+```text
+%LOCALAPPDATA%\genshin-uncap\
+```
 
-Press F10 first if you want to restore the original FPS value, then close the controller. The controller also exits when the game exits.
+At startup, the program automatically removes old logs and keeps only the 10 newest controller logs
 
-### What is tested?
+### Why does the actual FPS not reach the selected value?
 
-The main tested setup is `YuanShen.exe` through Steam/Proton, including XWayland and native Wayland launch paths. The executable is built for Windows x64.
+`--fps` sets an FPS limit; it does not guarantee that the game can reach that frame rate
+
+Actual FPS still depends on GPU / CPU performance, graphics settings, VSync, and other frame-rate limits
+
+### What if FPS unlocking stops working after a game update?
+
+Game updates may change the data used to locate the FPS limit
+
+When reporting an issue, keep the console error messages; if you use `--hidden`, also include the relevant logs from `%LOCALAPPDATA%\genshin-uncap\`
+
+### How do I exit?
+
+Close `genshin-uncap`
+
+If you want to restore the session's original FPS value before exiting, press F10 to pause FPS control, then close the program
+
+The controller also exits automatically when the game exits
+
+### Which environments have been tested?
+
+The main tested setup is `YuanShen.exe` running through Steam Proton, including XWayland and native Wayland
+
+The program is distributed as a Windows x64 executable and runs through Wine / Proton on Linux
 
 ## Building from Source
 
+Add the Windows x64 GNU target:
+
 ```sh
 rustup target add x86_64-pc-windows-gnu
+```
+
+Build the Release version:
+
+```sh
 cargo build --release --locked
 ```
 
-Output: `target/x86_64-pc-windows-gnu/release/genshin-uncap.exe`
+The output file is located at:
 
-Run Linux logic tests with:
+```text
+target/x86_64-pc-windows-gnu/release/genshin-uncap.exe
+```
+
+Run logic tests on Linux:
 
 ```sh
 cargo test --target x86_64-unknown-linux-gnu --locked
@@ -90,8 +124,20 @@ cargo test --target x86_64-unknown-linux-gnu --locked
 
 ## Credits
 
-Thanks to [xiaonian233/genshin-fps-unlock](https://github.com/xiaonian233/genshin-fps-unlock), [34736384/genshin-fps-unlock](https://github.com/34736384/genshin-fps-unlock), and [windows-rs](https://github.com/microsoft/windows-rs).
+Thanks to the following projects, tools, and ecosystems for references, infrastructure, runtime environments, and development assistance:
+
+* [xiaonian233/genshin-fps-unlock](https://github.com/xiaonian233/genshin-fps-unlock)
+* [34736384/genshin-fps-unlock](https://github.com/34736384/genshin-fps-unlock)
+* [windows-rs](https://github.com/microsoft/windows-rs)
+* [Rust](https://www.rust-lang.org/)
+* [Steam](https://store.steampowered.com/)
+* [Proton](https://github.com/ValveSoftware/Proton)
+* [Wine](https://www.winehq.org/)
+* [Linux](https://www.linux.org/)
+* OpenAI ChatGPT / Codex
 
 ## Open Source License
 
-[Mozilla Public License 2.0](LICENSE). Third-party notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+This project is licensed under the [Mozilla Public License 2.0](LICENSE)
+
+Third-party notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)

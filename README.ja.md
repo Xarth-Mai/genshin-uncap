@@ -98,8 +98,15 @@ FPS 上限は 1 回の実行中は固定されます。変更する場合は、�
 
 ## ソースからビルド
 
+Windows x64 GNU target を追加します：
+
 ```sh
 rustup target add x86_64-pc-windows-gnu
+```
+
+Release 版をビルドします：
+
+```sh
 cargo build --release --locked
 ```
 

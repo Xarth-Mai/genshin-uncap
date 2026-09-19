@@ -98,8 +98,15 @@ FPS 上限在一次執行期間保持固定。需要更換數值時，請使用�
 
 ## 從原始碼建置
 
+新增 Windows x64 GNU target：
+
 ```sh
 rustup target add x86_64-pc-windows-gnu
+```
+
+建置 Release 版本：
+
+```sh
 cargo build --release --locked
 ```
 
