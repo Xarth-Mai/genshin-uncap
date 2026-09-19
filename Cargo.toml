@@ -1,6 +1,6 @@
 [package]
 name = "genshin-uncap"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 license = "MPL-2.0"
 description = "A small external FPS controller for a validated Proton game session"
