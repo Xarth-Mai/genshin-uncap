@@ -161,7 +161,14 @@ fn base_module(
     expected: Option<&Path>,
 ) -> Result<Option<(PathBuf, usize, usize)>, String> {
     let raw = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid) };
-    if raw == INVALID_HANDLE_VALUE && unsafe { GetLastError() } == ERROR_BAD_LENGTH {
+    // A newly launched process can report PARTIAL_COPY before its loader is ready
+    // The caller retries only within the initialization deadline
+    if raw == INVALID_HANDLE_VALUE
+        && matches!(
+            unsafe { GetLastError() },
+            ERROR_BAD_LENGTH | ERROR_PARTIAL_COPY
+        )
+    {
         return Ok(None);
     }
     let snapshot = Handle::new(raw, "module snapshot")?;
@@ -674,6 +681,28 @@ fn run_controller(options: Options, output: &mut Output) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uninitialized_process_snapshot_is_retryable() {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .creation_flags(CREATE_SUSPENDED | DETACHED_PROCESS)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let result = (|| {
+            let process = Handle::new(
+                unsafe { OpenProcess(PROCESS_QUERY_INFORMATION, 0, child.id()) },
+                "query suspended child",
+            )?;
+            base_module(&process, child.id(), None)
+        })();
+        // Always reap the suspended fixture before checking the result
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(result.is_ok(), "uninitialized module snapshot: {result:?}");
+    }
 
     #[test]
     fn module_identity_uses_a_canonical_win32_process_path() {
