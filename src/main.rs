@@ -36,6 +36,6 @@ fn main() {
 
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("This executable requires Windows APIs; build for x86_64-pc-windows-gnu");
+    eprintln!("This executable requires Windows APIs; build on Windows for x86_64-pc-windows-msvc");
     std::process::exit(1);
 }

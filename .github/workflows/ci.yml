@@ -22,40 +22,33 @@ jobs:
       - run: cargo clippy --all-targets --target x86_64-unknown-linux-gnu --locked -- -D warnings
       - run: cargo test --target x86_64-unknown-linux-gnu --locked
 
-  windows-test:
-    name: Windows integration tests
+  windows:
+    name: Windows MSVC tests and release
     runs-on: windows-latest
     env:
       CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
       - run: cargo build --examples --locked
       - run: cargo test --locked
-
-  build:
-    name: Build Windows release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-gnu
-      - run: sudo apt-get update && sudo apt-get install --yes gcc-mingw-w64-x86-64 zip
-      - run: cargo build --release --target x86_64-pc-windows-gnu --locked
+      - run: cargo build --release --locked
       - name: Package release
-        shell: bash
+        shell: pwsh
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            version="${GITHUB_REF_NAME#v}"
-          else
-            version="$GITHUB_SHA"
-          fi
-          package_dir="genshin-uncap-v${version}-x86_64-pc-windows-gnu"
-          mkdir -p "dist/${package_dir}"
-          cp target/x86_64-pc-windows-gnu/release/genshin-uncap.exe "dist/${package_dir}/"
-          cp README*.md LICENSE THIRD_PARTY_NOTICES.md "dist/${package_dir}/"
-          (cd dist && zip -r "${package_dir}.zip" "${package_dir}")
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $version = $env:GITHUB_REF_NAME.Substring(1)
+          } else {
+            $version = $env:GITHUB_SHA
+          }
+          $packageName = "genshin-uncap-v$version-windows-x86_64"
+          $packageDir = "dist/$packageName"
+          New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/genshin-uncap.exe $packageDir
+          Copy-Item README*.md, LICENSE, THIRD_PARTY_NOTICES.md $packageDir
+          Compress-Archive -Path $packageDir -DestinationPath "dist/$packageName.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: windows-release
@@ -65,7 +58,7 @@ jobs:
   release:
     name: Publish GitHub Release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [check, windows-test, build]
+    needs: [check, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write

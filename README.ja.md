@@ -98,10 +98,10 @@ FPS 上限は 1 回の実行中は固定されます。変更する場合は、�
 
 ## ソースからビルド
 
-Windows x64 GNU target を追加します：
+Windows 上で Rust と Visual Studio C++ Build Tools（「C++ によるデスクトップ開発」ワークロード）をインストールし、Windows x64 MSVC target を追加します：
 
 ```sh
-rustup target add x86_64-pc-windows-gnu
+rustup target add x86_64-pc-windows-msvc
 ```
 
 Release 版をビルドします：
@@ -113,7 +113,7 @@ cargo build --release --locked
 出力先：
 
 ```text
-target/x86_64-pc-windows-gnu/release/genshin-uncap.exe
+target/x86_64-pc-windows-msvc/release/genshin-uncap.exe
 ```
 
 Linux 上でロジックテストを実行するには：
@@ -132,6 +132,7 @@ cargo test --target x86_64-unknown-linux-gnu --locked
 * [Rust](https://www.rust-lang.org/)
 * [Steam](https://store.steampowered.com/)
 * [Proton](https://github.com/ValveSoftware/Proton)
+* [dwproton](https://dawn.wine/dawn-winery/dwproton)
 * [Wine](https://www.winehq.org/)
 * [Linux](https://www.linux.org/)
 * OpenAI ChatGPT / Codex

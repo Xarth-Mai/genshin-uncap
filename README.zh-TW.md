@@ -98,10 +98,10 @@ FPS 上限在一次執行期間保持固定。需要更換數值時，請使用�
 
 ## 從原始碼建置
 
-新增 Windows x64 GNU target：
+在 Windows 上安裝 Rust 和 Visual Studio C++ Build Tools（「使用 C++ 的桌面開發」工作負載），然後新增 Windows x64 MSVC target：
 
 ```sh
-rustup target add x86_64-pc-windows-gnu
+rustup target add x86_64-pc-windows-msvc
 ```
 
 建置 Release 版本：
@@ -113,7 +113,7 @@ cargo build --release --locked
 輸出檔案位於：
 
 ```text
-target/x86_64-pc-windows-gnu/release/genshin-uncap.exe
+target/x86_64-pc-windows-msvc/release/genshin-uncap.exe
 ```
 
 在 Linux 上執行邏輯測試：
@@ -132,6 +132,7 @@ cargo test --target x86_64-unknown-linux-gnu --locked
 * [Rust](https://www.rust-lang.org/)
 * [Steam](https://store.steampowered.com/)
 * [Proton](https://github.com/ValveSoftware/Proton)
+* [dwproton](https://dawn.wine/dawn-winery/dwproton)
 * [Wine](https://www.winehq.org/)
 * [Linux](https://www.linux.org/)
 * OpenAI ChatGPT / Codex

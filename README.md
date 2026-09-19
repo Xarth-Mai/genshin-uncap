@@ -98,10 +98,10 @@ The program is distributed as a Windows x64 executable and runs through Wine / P
 
 ## Building from Source
 
-Add the Windows x64 GNU target:
+On Windows, install Rust and Visual Studio C++ Build Tools (the Desktop development with C++ workload), then add the Windows x64 MSVC target:
 
 ```sh
-rustup target add x86_64-pc-windows-gnu
+rustup target add x86_64-pc-windows-msvc
 ```
 
 Build the Release version:
@@ -113,7 +113,7 @@ cargo build --release --locked
 The output file is located at:
 
 ```text
-target/x86_64-pc-windows-gnu/release/genshin-uncap.exe
+target/x86_64-pc-windows-msvc/release/genshin-uncap.exe
 ```
 
 Run logic tests on Linux:
@@ -132,6 +132,7 @@ Thanks to the following projects, tools, and ecosystems for references, infrastr
 * [Rust](https://www.rust-lang.org/)
 * [Steam](https://store.steampowered.com/)
 * [Proton](https://github.com/ValveSoftware/Proton)
+* [dwproton](https://dawn.wine/dawn-winery/dwproton)
 * [Wine](https://www.winehq.org/)
 * [Linux](https://www.linux.org/)
 * OpenAI ChatGPT / Codex
