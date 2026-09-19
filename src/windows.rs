@@ -8,7 +8,7 @@ use crate::{
 use std::{
     collections::BTreeMap,
     ffi::OsString,
-    mem::{size_of, zeroed},
+    mem::size_of,
     os::windows::{ffi::OsStringExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -49,12 +49,16 @@ impl Handle {
 }
 impl Drop for Handle {
     fn drop(&mut self) {
+        // SAFETY: Callers transfer one owned handle from a Win32 creation call;
+        // it is neither cloned nor closed elsewhere and remains valid until drop
         unsafe {
             CloseHandle(self.0);
         }
     }
 }
 
+// SAFETY: The handler accesses only a static atomic, retains no borrowed data,
+// and performs no operation that can unwind across the system ABI boundary
 unsafe extern "system" fn on_console(event: u32) -> i32 {
     match event {
         CTRL_C_EVENT | CTRL_BREAK_EVENT | CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT
@@ -130,8 +134,10 @@ fn game_processes(names: &[&str]) -> Result<Vec<u32>, String> {
         unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) },
         "process snapshot",
     )?;
-    let mut entry: PROCESSENTRY32W = unsafe { zeroed() };
-    entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+    let mut entry = PROCESSENTRY32W {
+        dwSize: size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
     let mut processes = Vec::new();
     let mut result = unsafe { Process32FirstW(snapshot.0, &mut entry) };
     while result != 0 {
@@ -172,8 +178,10 @@ fn base_module(
         return Ok(None);
     }
     let snapshot = Handle::new(raw, "module snapshot")?;
-    let mut entry: MODULEENTRY32W = unsafe { zeroed() };
-    entry.dwSize = size_of::<MODULEENTRY32W>() as u32;
+    let mut entry = MODULEENTRY32W {
+        dwSize: size_of::<MODULEENTRY32W>() as u32,
+        ..Default::default()
+    };
     if unsafe { Module32FirstW(snapshot.0, &mut entry) } == 0 {
         if unsafe { GetLastError() } == ERROR_NO_MORE_FILES {
             return Ok(None);
@@ -206,7 +214,7 @@ fn base_module(
 }
 
 fn query(process: &Handle, address: usize) -> Result<MEMORY_BASIC_INFORMATION, String> {
-    let mut info = unsafe { zeroed() };
+    let mut info = MEMORY_BASIC_INFORMATION::default();
     if unsafe {
         VirtualQueryEx(
             process.0,
@@ -240,6 +248,9 @@ fn read(process: &Handle, address: usize, size: usize) -> Result<Vec<u8>, String
     address.checked_add(size).ok_or("read address overflow")?;
     let mut bytes = vec![0; size];
     let mut count = 0;
+    // SAFETY: The owned process handle remains live for this synchronous call;
+    // bytes has size writable bytes and count is a valid output pointer
+    // The remote address is checked by Win32, never dereferenced locally
     if unsafe {
         ReadProcessMemory(
             process.0,
@@ -268,6 +279,9 @@ fn write(process: &Handle, address: usize, bytes: &[u8]) -> Result<(), String> {
         .checked_add(bytes.len())
         .ok_or("write address overflow")?;
     let mut count = 0;
+    // SAFETY: The owned process handle and bytes.len() readable source bytes
+    // remain valid for this synchronous call; count is a valid output pointer
+    // The remote destination is checked by Win32, never dereferenced locally
     if unsafe {
         WriteProcessMemory(
             process.0,
