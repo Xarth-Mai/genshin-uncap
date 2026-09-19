@@ -18,6 +18,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --target x86_64-unknown-linux-gnu --locked -- -D warnings
       - run: cargo test --target x86_64-unknown-linux-gnu --locked
@@ -32,6 +35,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-msvc
       - run: cargo build --examples --locked
       - run: cargo test --locked
       - run: cargo build --release --locked
@@ -64,7 +70,6 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/download-artifact@v4
         with:
           name: windows-release
@@ -73,7 +78,7 @@ jobs:
         shell: bash
         run: |
           tag_version="${GITHUB_REF_NAME#v}"
-          package_version="$(cargo metadata --no-deps --format-version 1 | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' | head -n 1)"
+          package_version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
           if [[ -z "$package_version" || "$tag_version" != "$package_version" ]]; then
             echo "Tag version ${tag_version} does not match Cargo version ${package_version}" >&2
             exit 1
