@@ -156,6 +156,7 @@ fn game_processes(names: &[&str]) -> Result<Vec<u32>, String> {
 }
 
 fn base_module(
+    process: &Handle,
     pid: u32,
     expected: Option<&Path>,
 ) -> Result<Option<(PathBuf, usize, usize)>, String> {
@@ -172,13 +173,15 @@ fn base_module(
         }
         return Err(error("first module"));
     }
-    let end = entry
-        .szExePath
-        .iter()
-        .position(|&c| c == 0)
-        .unwrap_or(entry.szExePath.len());
-    let actual = std::fs::canonicalize(OsString::from_wide(&entry.szExePath[..end]))
-        .map_err(|e| format!("module identity: {e}"))?;
+    // Toolhelp's loader path is not necessarily a Win32 filesystem path
+    let mut path = vec![0_u16; 32768];
+    let mut length = path.len() as u32;
+    if unsafe { QueryFullProcessImageNameW(process.0, 0, path.as_mut_ptr(), &mut length) } == 0 {
+        return Err(error("process image path"));
+    }
+    let path = OsString::from_wide(&path[..length as usize]);
+    let actual =
+        std::fs::canonicalize(&path).map_err(|e| format!("module identity {path:?}: {e}"))?;
     if let Some(expected) = expected {
         if !actual
             .as_os_str()
@@ -529,7 +532,7 @@ fn run_controller(options: Options, output: &mut Output) -> Result<(), String> {
             output.line(format_args!("Cancelled during initialization"))?;
             return Ok(());
         }
-        if let Some((actual, base, size)) = base_module(pid, game.as_deref())? {
+        if let Some((actual, base, size)) = base_module(&process, pid, game.as_deref())? {
             if game.is_none()
                 && !actual.file_name().is_some_and(|name| {
                     AUTO_GAME_NAMES
@@ -671,6 +674,24 @@ fn run_controller(options: Options, output: &mut Output) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn module_identity_uses_a_canonical_win32_process_path() {
+        let pid = unsafe { GetCurrentProcessId() };
+        let process = Handle::new(
+            unsafe { OpenProcess(PROCESS_QUERY_INFORMATION, 0, pid) },
+            "query self process",
+        )
+        .unwrap();
+        let expected = std::fs::canonicalize(std::env::current_exe().unwrap()).unwrap();
+        let (actual, base, size) = base_module(&process, pid, Some(&expected))
+            .unwrap()
+            .unwrap();
+        assert_eq!(actual, expected);
+        assert_ne!(base, 0);
+        assert_ne!(size, 0);
+        assert!(base_module(&process, pid, Some(Path::new("C:\\different.exe"))).is_err());
+    }
 
     #[test]
     fn matching_fps_needs_no_write_access_but_mismatch_does() {
