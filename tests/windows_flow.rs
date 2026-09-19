@@ -297,6 +297,13 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            eprintln!(
+                "controller log:\n{}\nfixture report:\n{}",
+                fs::read_to_string(&self.log).unwrap_or_default(),
+                self.contents()
+            );
+        }
         let _ = fs::write(&self.exit, []);
         if self.child.try_wait().ok().flatten().is_none() {
             let _ = self.child.kill();
